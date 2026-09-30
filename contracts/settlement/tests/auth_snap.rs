@@ -109,7 +109,7 @@ fn propose_vault_requires_auth() {
 #[test]
 fn accept_vault_requires_auth() {
     let env = Env::default();
-    let (admin, vault, client) = setup(&env);
+    let (admin, _vault, client) = setup(&env);
 
     env.mock_all_auths();
     let new_vault = Address::generate(&env);
@@ -118,6 +118,65 @@ fn accept_vault_requires_auth() {
     env.set_auths(&[]);
     let res = client.try_accept_vault(&new_vault);
     assert!(res.is_err(), "accept_vault must require auth");
+}
+
+/// Admin alone must NOT be able to complete a vault rotation.
+/// Closing the one-actor bypass described in issue #1141.
+#[test]
+fn accept_vault_admin_cannot_bypass_pending_check() {
+    let env = Env::default();
+    let (admin, _vault, client) = setup(&env);
+
+    env.mock_all_auths();
+    let new_vault = Address::generate(&env);
+    client.propose_vault(&admin, &new_vault);
+
+    // Admin tries to call accept_vault as themselves — must be rejected.
+    let res = client.try_accept_vault(&admin);
+    assert!(
+        res.is_err(),
+        "admin alone must not be able to accept a vault rotation"
+    );
+}
+
+/// Accepting without a prior proposal must return the typed
+/// `NoVaultRotationPending` error, not an unstructured panic.
+#[test]
+fn accept_vault_without_proposal_returns_typed_error() {
+    let env = Env::default();
+    let (_admin, _vault, client) = setup(&env);
+
+    env.mock_all_auths();
+    let random = Address::generate(&env);
+    let res = client.try_accept_vault(&random);
+    let expected_code = SettlementError::NoVaultRotationPending as u32;
+    let got_expected = match res {
+        Err(Ok(e)) => {
+            let sdk_err: soroban_sdk::Error = e.into();
+            sdk_err.get_code() == expected_code
+        }
+        _ => false,
+    };
+    assert!(
+        got_expected,
+        "expected NoVaultRotationPending (code {})",
+        expected_code
+    );
+}
+
+/// Only the pending vault (not the admin) can finalize a rotation.
+#[test]
+fn accept_vault_only_pending_vault_can_accept() {
+    let env = Env::default();
+    let (admin, _vault, client) = setup(&env);
+
+    env.mock_all_auths();
+    let new_vault = Address::generate(&env);
+    client.propose_vault(&admin, &new_vault);
+
+    // Pending vault accepts — this must succeed.
+    client.accept_vault(&new_vault);
+    assert_eq!(client.get_vault(), new_vault, "vault must be updated to the new address");
 }
 
 #[test]

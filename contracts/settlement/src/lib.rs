@@ -1222,11 +1222,14 @@ impl CalloraSettlement {
         Self::propose_vault(env, caller, new_vault);
     }
 
-    /// Finalize a pending vault rotation. May be called by either the
-    /// proposed vault or the current admin.
+    /// Finalize a pending vault rotation. Must be called by the pending vault
+    /// itself — proving the new vault address can authorize — to prevent a
+    /// single admin key from completing the rotation alone.
     ///
-    /// # Panics
-    /// * `"no vault rotation pending"` â€” `propose_vault` was not called first.
+    /// # Errors
+    /// * [`SettlementError::NoVaultRotationPending`] — `propose_vault` was not
+    ///   called first.
+    /// * [`SettlementError::Unauthorized`] — caller is not the pending vault.
     ///
     /// # Events
     /// Emits `vault_accepted` with [`VaultAcceptedEvent`].
@@ -1236,9 +1239,11 @@ impl CalloraSettlement {
             .storage()
             .instance()
             .get(&StorageKey::PendingVault)
-            .unwrap_or_else(|| panic!("no vault rotation pending"));
-        let admin = Self::get_admin(env.clone()).unwrap();
-        if caller != pending && caller != admin {
+            .unwrap_or_else(|| env.panic_with_error(SettlementError::NoVaultRotationPending));
+        // Only the pending vault may accept — not the admin.  This closes the
+        // one-actor bypass: the admin can propose but cannot unilaterally
+        // complete the two-step rotation.
+        if caller != pending {
             env.panic_with_error(SettlementError::Unauthorized);
         }
         let old_vault = Self::get_vault(env.clone()).unwrap();
