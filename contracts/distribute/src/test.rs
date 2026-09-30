@@ -20,12 +20,13 @@ fn init_event_structure_validation() {
     let events = env.events().all();
     let event = events.last().unwrap();
 
+    // Topics: (event_name, callora_v1, admin)
     let topics = &event.1;
-    assert_eq!(topics.len(), 2);
+    assert_eq!(topics.len(), 3);
     let topic0: Symbol = topics.get(0).unwrap().into_val(&env);
-    let topic1: Address = topics.get(1).unwrap().into_val(&env);
+    let topic2: Address = topics.get(2).unwrap().into_val(&env);
     assert_eq!(topic0, Symbol::new(&env, "init"));
-    assert_eq!(topic1, admin);
+    assert_eq!(topic2, admin);
 
     let data: Address = event.2.into_val(&env);
     assert_eq!(data, usdc_addr);
@@ -89,8 +90,9 @@ fn admin_transfer_events_structure() {
     let last_event = events.last().unwrap();
     let topic0: Symbol = last_event.1.get(0).unwrap().into_val(&env);
     assert_eq!(topic0, Symbol::new(&env, "admin_transfer_completed"));
-    let topic1: Address = last_event.1.get(1).unwrap().into_val(&env);
-    assert_eq!(topic1, new_admin);
+    // Topics: (event_name, callora_v1, new_admin)
+    let topic2: Address = last_event.1.get(2).unwrap().into_val(&env);
+    assert_eq!(topic2, new_admin);
 }
 
 #[test]
@@ -137,8 +139,9 @@ fn pause_unpause_events() {
     let pause_event = events.last().unwrap();
     let topic0: Symbol = pause_event.1.get(0).unwrap().into_val(&env);
     assert_eq!(topic0, Symbol::new(&env, "pause_set"));
-    let topic1: Address = pause_event.1.get(1).unwrap().into_val(&env);
-    assert_eq!(topic1, admin);
+    // Topics: (event_name, callora_v1, caller)
+    let topic2: Address = pause_event.1.get(2).unwrap().into_val(&env);
+    assert_eq!(topic2, admin);
     let is_paused: bool = pause_event.2.into_val(&env);
     assert!(is_paused);
 
@@ -174,8 +177,9 @@ fn set_max_distribute_event() {
     let event = events.last().unwrap();
     let topic0: Symbol = event.1.get(0).unwrap().into_val(&env);
     assert_eq!(topic0, Symbol::new(&env, "set_max_distribute"));
-    let topic1: Address = event.1.get(1).unwrap().into_val(&env);
-    assert_eq!(topic1, admin);
+    // Topics: (event_name, callora_v1, admin)
+    let topic2: Address = event.1.get(2).unwrap().into_val(&env);
+    assert_eq!(topic2, admin);
     let data: (i128, i128) = event.2.into_val(&env);
     assert_eq!(data, (i128::MAX, 1000));
 }
@@ -211,8 +215,8 @@ fn distribute_event_structure() {
         let topic0: Symbol = topics.get(0).unwrap().into_val(&env);
         if topic0 == Symbol::new(&env, "distribute") {
             found = true;
-            let topic1: Address = topics.get(1).unwrap().into_val(&env);
-            assert_eq!(topic1, recipient);
+            let topic2: Address = topics.get(2).unwrap().into_val(&env);
+            assert_eq!(topic2, recipient);
             let amount: i128 = event.2.into_val(&env);
             assert_eq!(amount, 500);
             break;
@@ -259,20 +263,20 @@ fn distribute_lifecycle_events() {
         
         if topic0 == Symbol::new(&env, "distribute_started") {
             found_started = true;
-            let topic1: Address = topics.get(1).unwrap().into_val(&env);
-            assert_eq!(topic1, recipient);
+            let topic2: Address = topics.get(2).unwrap().into_val(&env);
+            assert_eq!(topic2, recipient);
             let amount: i128 = event.2.into_val(&env);
             assert_eq!(amount, 500);
         } else if topic0 == Symbol::new(&env, "distribute") {
             found_distribute = true;
-            let topic1: Address = topics.get(1).unwrap().into_val(&env);
-            assert_eq!(topic1, recipient);
+            let topic2: Address = topics.get(2).unwrap().into_val(&env);
+            assert_eq!(topic2, recipient);
             let amount: i128 = event.2.into_val(&env);
             assert_eq!(amount, 500);
         } else if topic0 == Symbol::new(&env, "distribute_completed") {
             found_completed = true;
-            let topic1: Address = topics.get(1).unwrap().into_val(&env);
-            assert_eq!(topic1, recipient);
+            let topic2: Address = topics.get(2).unwrap().into_val(&env);
+            assert_eq!(topic2, recipient);
             let amount: i128 = event.2.into_val(&env);
             assert_eq!(amount, 500);
         }
@@ -327,7 +331,6 @@ fn all_event_constructors_return_correct_symbols() {
 #[test]
 fn require_auth_on_all_state_changing_functions() {
     let env = Env::default();
-    // Do NOT mock all auths — we want to verify auth failures
     let admin = Address::generate(&env);
     let usdc_addr = env
         .register_stellar_asset_contract_v2(admin.clone())
@@ -335,13 +338,14 @@ fn require_auth_on_all_state_changing_functions() {
     let contract_addr = env.register(Distribute, ());
     let client = DistributeClient::new(&env, &contract_addr);
 
+    // Init and fund with all auths mocked (setup phase).
+    env.mock_all_auths();
     client.init(&admin, &usdc_addr);
-
-    // Fund the contract for distribute tests
     let usdc_admin = token::StellarAssetClient::new(&env, &usdc_addr);
     usdc_admin.mint(&contract_addr, &1000);
 
-    // Non-admin should fail on all state-changing functions
+    // Now drop all auth — non-admin should fail on every state-changing function.
+    env.set_auths(&[]);
     let intruder = Address::generate(&env);
     let recipient = Address::generate(&env);
 

@@ -56,8 +56,10 @@ pub const LIFETIME_THRESHOLD: u32 = 1_000;
 
 /// Canonical storage keys for the entire Distribute contract.
 ///
-/// Combines per-account state tracking keys with administrative keys so that
-/// all storage layout is defined in one place.
+/// All reads and writes to instance storage MUST go through this enum so that
+/// the layout remains consistent.  In particular, the pause flag **must** use
+/// `StorageKey::Paused` — using a bare `Symbol("paused")` string key would
+/// create a second, incompatible entry and break the circuit-breaker.
 #[contracttype]
 pub enum StorageKey {
     /// Contract admin address.
@@ -65,11 +67,18 @@ pub enum StorageKey {
     /// Pending admin address during a two-step admin transfer.
     PendingAdmin,
     /// Circuit-breaker flag (`true` = paused).
+    ///
+    /// This is the **single** canonical key for the pause flag.  No other
+    /// key (e.g. a bare `Symbol("paused")`) may be used for this purpose.
     Paused,
     /// Contract version marker (WASM hash) set by `upgrade`.
     ContractVersion,
     /// Global per-account cap.
     GlobalCap,
+    /// USDC token address configured during `init`.
+    Usdc,
+    /// Maximum distributable amount per leg.
+    MaxDistribute,
     /// Total active entries for an account (all categories combined).
     AccountCount(Address),
     /// Active entries for a specific `(account, category)` pair.
