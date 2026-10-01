@@ -197,7 +197,7 @@ fn set_reserve_cap_event_includes_previous_value() {
 #[test]
 fn deposit_succeeds_when_no_cap_set() {
     let env = Env::default();
-    let (vault_address, client, usdc, usdc_client, usdc_admin, owner) = setup(&env);
+    let (vault_address, client, _usdc, usdc_client, usdc_admin, owner) = setup(&env);
     env.mock_all_auths();
     usdc_admin.mint(&owner, &1_000_000);
     usdc_client.approve(&owner, &vault_address, &1_000_000, &99999);
@@ -208,7 +208,7 @@ fn deposit_succeeds_when_no_cap_set() {
 #[test]
 fn deposit_succeeds_when_below_cap() {
     let env = Env::default();
-    let (vault_address, client, usdc, usdc_client, usdc_admin, owner) = setup(&env);
+    let (vault_address, client, _usdc, usdc_client, usdc_admin, owner) = setup(&env);
     env.mock_all_auths();
     client.set_reserve_cap(&owner, &usdc, &500);
     usdc_admin.mint(&owner, &300);
@@ -220,7 +220,7 @@ fn deposit_succeeds_when_below_cap() {
 #[test]
 fn deposit_succeeds_at_exact_cap() {
     let env = Env::default();
-    let (vault_address, client, usdc, usdc_client, usdc_admin, owner) = setup(&env);
+    let (vault_address, client, _usdc, usdc_client, usdc_admin, owner) = setup(&env);
     env.mock_all_auths();
     client.set_reserve_cap(&owner, &usdc, &1_000);
     usdc_admin.mint(&owner, &1_000);
@@ -232,7 +232,7 @@ fn deposit_succeeds_at_exact_cap() {
 #[test]
 fn deposit_fails_when_exceeds_cap() {
     let env = Env::default();
-    let (vault_address, client, usdc, usdc_client, usdc_admin, owner) = setup(&env);
+    let (vault_address, client, _usdc, usdc_client, usdc_admin, owner) = setup(&env);
     env.mock_all_auths();
     client.set_reserve_cap(&owner, &usdc, &1_000);
     usdc_admin.mint(&owner, &1_001);
@@ -244,7 +244,7 @@ fn deposit_fails_when_exceeds_cap() {
 #[test]
 fn deposit_fails_when_cumulative_total_exceeds_cap() {
     let env = Env::default();
-    let (vault_address, client, usdc, usdc_client, usdc_admin, owner) = setup(&env);
+    let (vault_address, client, _usdc, usdc_client, usdc_admin, owner) = setup(&env);
     env.mock_all_auths();
     client.set_reserve_cap(&owner, &usdc, &500);
 
@@ -263,7 +263,7 @@ fn deposit_fails_when_cumulative_total_exceeds_cap() {
 #[test]
 fn deposit_succeeds_again_after_cap_raised() {
     let env = Env::default();
-    let (vault_address, client, usdc, usdc_client, usdc_admin, owner) = setup(&env);
+    let (vault_address, client, _usdc, usdc_client, usdc_admin, owner) = setup(&env);
     env.mock_all_auths();
     client.set_reserve_cap(&owner, &usdc, &300);
 
@@ -287,7 +287,7 @@ fn deposit_succeeds_again_after_cap_raised() {
 #[test]
 fn deposit_at_one_above_cap_fails() {
     let env = Env::default();
-    let (vault_address, client, usdc, usdc_client, usdc_admin, owner) = setup(&env);
+    let (vault_address, client, _usdc, usdc_client, usdc_admin, owner) = setup(&env);
     env.mock_all_auths();
     client.set_reserve_cap(&owner, &usdc, &99);
     usdc_admin.mint(&owner, &100);
@@ -299,7 +299,7 @@ fn deposit_at_one_above_cap_fails() {
 #[test]
 fn reserve_cap_does_not_affect_withdrawal() {
     let env = Env::default();
-    let (vault_address, client, usdc, usdc_client, usdc_admin, owner) = setup(&env);
+    let (vault_address, client, _usdc, usdc_client, usdc_admin, owner) = setup(&env);
     env.mock_all_auths();
     usdc_admin.mint(&owner, &500);
     usdc_client.approve(&owner, &vault_address, &500, &99999);

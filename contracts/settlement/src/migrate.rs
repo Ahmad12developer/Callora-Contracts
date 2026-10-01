@@ -100,6 +100,7 @@ pub fn storage_version(env: &Env) -> u32 {
 pub fn migrate_v1_to_v2(env: &Env, caller: &Address) {
     caller.require_auth();
     require_admin(env, caller);
+    register_configured_usdc(env, caller);
 
     if storage_version(env) >= STORAGE_VERSION_V2 {
         return;
@@ -168,6 +169,7 @@ pub fn migrate_v1_to_v2_page(
 ) -> (u32, bool) {
     caller.require_auth();
     require_admin(env, caller);
+    register_configured_usdc(env, caller);
 
     if storage_version(env) >= STORAGE_VERSION_V2 {
         return (0, true);
@@ -212,6 +214,29 @@ pub fn migrate_v1_to_v2_page(
 }
 
 // ─── Internal helpers ─────────────────────────────────────────────────────────
+fn register_configured_usdc(env: &Env, caller: &Address) {
+    let instance = env.storage().instance();
+    if instance
+        .get::<_, bool>(&StorageKey::SupportedTokensMigrated)
+        .unwrap_or(false)
+    {
+        return;
+    }
+    let Some(usdc_token) = instance.get::<_, Address>(&StorageKey::Usdc) else {
+        return;
+    };
+    let key = StorageKey::SupportedToken(usdc_token.clone());
+    if !env.storage().persistent().has(&key) {
+        env.storage().persistent().set(&key, &true);
+        env.storage().persistent().extend_ttl(
+            &key,
+            crate::PERSISTENT_BUMP_THRESHOLD,
+            crate::PERSISTENT_BUMP_AMOUNT,
+        );
+        crate::events::emit_supported_token_added(env, caller, &usdc_token);
+    }
+    instance.set(&StorageKey::SupportedTokensMigrated, &true);
+}
 
 /// Abort with `NotInitialized` if the contract has not been initialised, or
 /// `Unauthorized` if `caller` is not the stored admin.
@@ -240,9 +265,11 @@ fn migrate_developer_slot(env: &Env, addr: &Address, usdc_token: &Address) {
             .checked_add(existing_v2)
             .unwrap_or_else(|| env.panic_with_error(SettlementError::DeveloperOverflow));
         env.storage().persistent().set(&v2_key, &merged);
-        env.storage()
-            .persistent()
-            .extend_ttl(&v2_key, 50_000, 50_000);
+        env.storage().persistent().extend_ttl(
+            &v2_key,
+            crate::types::PERSISTENT_BUMP_THRESHOLD,
+            crate::types::PERSISTENT_BUMP_AMOUNT,
+        );
         env.storage().persistent().remove(&v1_key);
     }
 }
@@ -261,6 +288,112 @@ pub fn migrate_single_developer(
         .ok_or(crate::SettlementError::UsdcTokenNotConfigured)?;
     migrate_developer_slot(env, developer, &usdc_token);
     Ok(())
+}
+
+// ─── Index-to-pages migration ─────────────────────────────────────────────────
+
+/// Migrate the legacy flat `DeveloperIndex` (instance storage `Vec<Address>`)
+/// to the new paged persistent index (`IndexPage(u32)` + `DeveloperMember`).
+///
+/// ## What this does
+///
+/// 1. Reads `StorageKey::DeveloperIndex` from instance storage (the old
+///    unbounded `Vec<Address>`).
+/// 2. For each address, calls [`CalloraSettlement::index_insert`] which:
+///    - Sets `StorageKey::DeveloperMember(addr)` in persistent storage.
+///    - Appends the address to the appropriate `StorageKey::IndexPage(n)`.
+///    - Updates `StorageKey::IndexPageCount` in instance storage.
+/// 3. Removes `StorageKey::DeveloperIndex` from instance storage.
+///
+/// ## Resumability
+///
+/// The function uses `DeveloperMember` as a per-address idempotency guard.
+/// If the migration is interrupted mid-way and re-run, already-migrated
+/// addresses are skipped in O(1).  Partial progress is therefore safe.
+///
+/// ## Idempotency
+///
+/// Once `StorageKey::DeveloperIndex` is absent (removed on completion),
+/// subsequent calls are a cheap no-op: no pages exist to iterate, and
+/// `index_insert` guards against double-registration.
+///
+/// ## Batch API
+///
+/// For large deployments process `batch_size` addresses per call and pass
+/// the returned `next_offset` back in until `is_complete == true`.
+///
+/// ```text
+/// let mut offset = 0u32;
+/// loop {
+///     let (next, done) = client.migrate_index_to_pages(&admin, &offset, &50u32);
+///     if done { break; }
+///     offset = next;
+/// }
+/// ```
+///
+/// ## Auth
+///
+/// Admin signature required.
+pub fn migrate_index_to_pages(
+    env: &Env,
+    caller: &Address,
+    offset: u32,
+    batch_size: u32,
+) -> (u32, bool) {
+    caller.require_auth();
+    require_admin(env, caller);
+
+    let inst = env.storage().instance();
+
+    // If the old key is gone the migration is already complete.
+    if !inst.has(&StorageKey::DeveloperIndex) {
+        return (0, true);
+    }
+
+    let index: Vec<Address> = inst
+        .get(&StorageKey::DeveloperIndex)
+        .unwrap_or_else(|| Vec::new(env));
+
+    let total = index.len();
+
+    // Empty old index — remove and mark done immediately.
+    if total == 0 {
+        inst.remove(&StorageKey::DeveloperIndex);
+        env.events().publish(
+            (Symbol::new(env, "mig_idx_pages_done"),),
+            0u32,
+        );
+        return (0, true);
+    }
+
+    let effective = if batch_size == 0 {
+        1u32
+    } else {
+        batch_size.min(MAX_BATCH_SIZE)
+    };
+    let end = offset.saturating_add(effective).min(total);
+
+    let mut i = 0u32;
+    for addr in index.iter() {
+        if i >= end {
+            break;
+        }
+        if i >= offset {
+            crate::CalloraSettlement::index_insert(env, addr);
+        }
+        i = i.saturating_add(1);
+    }
+
+    let done = end >= total;
+    if done {
+        inst.remove(&StorageKey::DeveloperIndex);
+        env.events().publish(
+            (Symbol::new(env, "mig_idx_pages_done"),),
+            total,
+        );
+    }
+
+    (end, done)
 }
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
@@ -519,6 +652,120 @@ mod tests {
             });
             assert_eq!(bal, 100i128);
         }
+    }
+
+    #[test]
+    fn paginated_migration_matches_one_shot_across_varied_pages() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (one_shot_contract, one_shot_admin, one_shot_usdc) = setup(&env);
+        let (paged_contract, paged_admin, paged_usdc) = setup(&env);
+        let one_shot = CalloraSettlementClient::new(&env, &one_shot_contract);
+        let paged = CalloraSettlementClient::new(&env, &paged_contract);
+        let devs: [Address; 9] = core::array::from_fn(|_| Address::generate(&env));
+
+        for contract in [&one_shot_contract, &paged_contract] {
+            env.as_contract(contract, || {
+                let mut index = soroban_sdk::Vec::new(&env);
+                for (position, dev) in devs.iter().enumerate() {
+                    let v1_balance = 1_000 + position as i128;
+                    let existing_v2 = 100 + position as i128;
+                    env.storage()
+                        .persistent()
+                        .set(&StorageKey::DeveloperBalanceV1(dev.clone()), &v1_balance);
+                    let usdc = if contract == &one_shot_contract {
+                        one_shot_usdc.clone()
+                    } else {
+                        paged_usdc.clone()
+                    };
+                    env.storage().persistent().set(
+                        &StorageKey::DeveloperBalance(dev.clone(), usdc),
+                        &existing_v2,
+                    );
+                    index.push_back(dev.clone());
+                }
+                env.storage()
+                    .instance()
+                    .set(&StorageKey::DeveloperIndex, &index);
+            });
+        }
+
+        one_shot.migrate_v1_to_v2(&one_shot_admin);
+        assert_eq!(one_shot.migration_storage_version(), STORAGE_VERSION_V2);
+        assert_eq!(paged.migration_storage_version(), STORAGE_VERSION_V1);
+
+        let total = devs.len() as u32;
+        let mut offset = 0u32;
+        let mut random_state = 0xC011_AA_u32;
+        while offset < total {
+            random_state = random_state
+                .wrapping_mul(1_664_525)
+                .wrapping_add(1_013_904_223);
+            let batch_size = random_state % 4 + 1;
+            let (next_offset, done) =
+                paged.migrate_v1_to_v2_page(&paged_admin, &offset, &batch_size);
+            assert_eq!(next_offset, offset.saturating_add(batch_size).min(total));
+            assert_eq!(done, next_offset == total);
+            assert_eq!(
+                paged.migration_storage_version(),
+                if done {
+                    STORAGE_VERSION_V2
+                } else {
+                    STORAGE_VERSION_V1
+                }
+            );
+            offset = next_offset;
+        }
+
+        let (next_offset, done) = paged.migrate_v1_to_v2_page(&paged_admin, &0, &3);
+        assert_eq!((next_offset, done), (0, true));
+        assert_eq!(paged.migration_storage_version(), STORAGE_VERSION_V2);
+
+        for (position, dev) in devs.iter().enumerate() {
+            let expected = 1_100 + 2 * position as i128;
+            let one_shot_balance: i128 = env.as_contract(&one_shot_contract, || {
+                env.storage()
+                    .persistent()
+                    .get(&StorageKey::DeveloperBalance(
+                        dev.clone(),
+                        one_shot_usdc.clone(),
+                    ))
+                    .unwrap_or(0)
+            });
+            let paged_balance: i128 = env.as_contract(&paged_contract, || {
+                env.storage()
+                    .persistent()
+                    .get(&StorageKey::DeveloperBalance(
+                        dev.clone(),
+                        paged_usdc.clone(),
+                    ))
+                    .unwrap_or(0)
+            });
+            assert_eq!(one_shot_balance, expected);
+            assert_eq!(paged_balance, one_shot_balance);
+            for contract in [&one_shot_contract, &paged_contract] {
+                let v1_exists = env.as_contract(contract, || {
+                    env.storage()
+                        .persistent()
+                        .has(&StorageKey::DeveloperBalanceV1(dev.clone()))
+                });
+                assert!(!v1_exists);
+            }
+        }
+    }
+
+    #[test]
+    fn paginated_migration_rejects_non_admin() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (contract, _, _) = setup(&env);
+        let client = CalloraSettlementClient::new(&env, &contract);
+        let non_admin = Address::generate(&env);
+
+        assert!(client
+            .try_migrate_v1_to_v2_page(&non_admin, &0u32, &1u32)
+            .is_err());
+        assert_eq!(client.migration_storage_version(), STORAGE_VERSION_V1);
     }
 
     #[test]

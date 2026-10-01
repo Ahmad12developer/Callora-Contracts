@@ -129,8 +129,7 @@ fuzz_target!(|data: &[u8]| {
     // --- Tracked state ------------------------------------------------------
     // Maps operand (name seed) → registered Address. We use the raw u16 operand
     // as the key since SorobanString does not implement Hash.
-    let mut registered: std::collections::HashMap<u16, Address> =
-        std::collections::HashMap::new();
+    let mut registered: std::collections::HashMap<u16, Address> = std::collections::HashMap::new();
 
     // -----------------------------------------------------------------------
     // Main operation loop

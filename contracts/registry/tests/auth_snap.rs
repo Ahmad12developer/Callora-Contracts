@@ -41,9 +41,7 @@ fn register_offering_requires_auth() {
     let developer = Address::generate(&env);
     let offering_id = String::from_str(&env, "offering-1");
     let metadata = String::from_str(&env, "test metadata");
-    let res = client.try_register_offering(
-        &admin, &developer, &offering_id, &metadata,
-    );
+    let res = client.try_register_offering(&admin, &developer, &offering_id, &metadata);
     assert!(res.is_err(), "register_offering must require auth");
 }
 
@@ -58,10 +56,17 @@ fn register_offering_with_gate_requires_auth() {
     let offering_id = String::from_str(&env, "offering-2");
     let metadata = String::from_str(&env, "test metadata");
     let res = client.try_register_offering_with_gate(
-        &admin, &developer, &token, &100_i128,
-        &offering_id, &metadata,
+        &admin,
+        &developer,
+        &token,
+        &100_i128,
+        &offering_id,
+        &metadata,
     );
-    assert!(res.is_err(), "register_offering_with_gate must require auth");
+    assert!(
+        res.is_err(),
+        "register_offering_with_gate must require auth"
+    );
 }
 
 #[test]

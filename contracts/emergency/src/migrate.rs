@@ -712,7 +712,7 @@ mod tests {
         let expected_topic = Symbol::new(&env, "emergency_migrated");
         let has_migrated_event = all_events
             .into_iter()
-            .any(|(_addr, topics, _data)| topics.contains(&expected_topic.to_val()));
+            .any(|(_addr, topics, _data)| topics.contains(expected_topic.to_val()));
         assert!(has_migrated_event);
     }
 
@@ -729,7 +729,7 @@ mod tests {
         let expected_topic = Symbol::new(&env, "upgrade_authorised");
         let has_auth_event = all_events
             .into_iter()
-            .any(|(_addr, topics, _data)| topics.contains(&expected_topic.to_val()));
+            .any(|(_addr, topics, _data)| topics.contains(expected_topic.to_val()));
         assert!(has_auth_event);
     }
 
@@ -744,5 +744,92 @@ mod tests {
 
         let result = client.migrate(&admin, &1, &2);
         assert_eq!(result.last_updated, ts);
+    }
+
+    // ── Edge cases required by issue #1237 ────────────────────────────────────
+
+    /// `migrate` must return `Overflow` when `expected_version` is `u32::MAX`
+    /// because `checked_add(1)` wraps and returns `None`.
+    #[test]
+    fn migrate_version_overflow_returns_overflow_error() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let contract = env.register(EmergencyMigrate, ());
+        let client = EmergencyMigrateClient::new(&env, &contract);
+
+        // Initialise at u32::MAX so that checked_add(1) saturates.
+        client.init(&admin, &u32::MAX);
+        env.as_contract(&contract, || {
+            env.storage().instance().set(
+                &StorageKey::Legacy,
+                &LegacyEmergency {
+                    balance: 100,
+                    last_updated: 1,
+                },
+            );
+        });
+
+        // expected_version = u32::MAX; target would require u32::MAX + 1 → overflow.
+        let result = client.try_migrate(&admin, &u32::MAX, &0);
+        assert!(
+            result.is_err(),
+            "migrate with u32::MAX expected_version must fail with Overflow"
+        );
+    }
+
+    /// `authorize_upgrade` must accept a valid call even when the WASM hash is
+    /// the all-zero byte array.  The contract imposes no lower bound on hash
+    /// content; rejecting zeros would be an undocumented implicit constraint.
+    #[test]
+    fn authorize_upgrade_accepts_zero_wasm_hash() {
+        let env = Env::default();
+        let (admin, contract) = setup(&env, 100, 1);
+        let client = EmergencyMigrateClient::new(&env, &contract);
+        let zero_hash = BytesN::from_array(&env, &[0u8; 32]);
+
+        // Must succeed without error.
+        client.authorize_upgrade(&admin, &1, &zero_hash);
+        assert!(
+            client.is_upgrade_authorised(&zero_hash),
+            "zero wasm hash must be accepted and reported as authorised"
+        );
+        // A non-zero hash must still be rejected.
+        let other_hash = BytesN::from_array(&env, &[0xAB; 32]);
+        assert!(
+            !client.is_upgrade_authorised(&other_hash),
+            "non-authorised hash must not be reported as authorised"
+        );
+    }
+
+    /// `authorize_upgrade` must return `VersionMismatch` when `target_version`
+    /// is strictly *less* than the stored version (stale version path).
+    #[test]
+    fn authorize_upgrade_rejects_stale_version() {
+        let env = Env::default();
+        let (admin, contract) = setup(&env, 100, 1);
+        let client = EmergencyMigrateClient::new(&env, &contract);
+        let hash = BytesN::from_array(&env, &[0xAA; 32]);
+
+        // Stored version is 1. Supplying version 0 is a stale (past) version.
+        let result = client.try_authorize_upgrade(&admin, &0, &hash);
+        assert!(
+            result.is_err(),
+            "authorize_upgrade with a stale (past) version must be rejected"
+        );
+
+        // Supplying a future version (2) is equally invalid.
+        let result = client.try_authorize_upgrade(&admin, &2, &hash);
+        assert!(
+            result.is_err(),
+            "authorize_upgrade with a future version must be rejected"
+        );
+
+        // Only the exact stored version (1) should be accepted.
+        client.authorize_upgrade(&admin, &1, &hash);
+        assert!(
+            client.is_upgrade_authorised(&hash),
+            "authorize_upgrade with the exact stored version must succeed"
+        );
     }
 }

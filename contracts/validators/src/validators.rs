@@ -70,6 +70,70 @@ pub fn is_visible_ascii_metadata(s: &String) -> bool {
     normalize_visible_ascii(s).is_ok()
 }
 
+/// Maximum byte length accepted for an offering id.
+pub const MAX_OFFERING_ID_LEN: u32 = 64;
+
+/// Return whether a byte is an allowed offering-id character.
+///
+/// Offering ids are restricted to lowercase ASCII letters, digits, and the
+/// `_`/`-` separators. This excludes spaces, C0/DEL control bytes, bidi and
+/// zero-width controls, and Unicode confusables by construction.
+pub fn is_valid_offering_id_byte(b: u8) -> bool {
+    b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_' || b == b'-'
+}
+
+/// Normalize and validate an offering id.
+///
+/// Offering ids are used as keys by settlement pricing and off-chain routing.
+/// To prevent visually confusable ids from spoofing another developer's offering,
+/// ids are restricted to non-empty lowercase ASCII letters, digits, and the
+/// `_`/`-` separators, with no leading or trailing spaces.
+///
+/// # Errors
+///
+/// Always returns [`ValidatorError::InvalidOfferingId`] on rejection so callers
+/// can distinguish id failures from metadata failures. Rejections include:
+///
+/// - empty ids,
+/// - ids longer than [`MAX_OFFERING_ID_LEN`] bytes,
+/// - ids having leading or trailing spaces,
+/// - ids having any byte outside `[a-z0-9_-]`.
+///
+/// On success the full fixed-size buffer is returned; only the first `s.len()`
+/// bytes are meaningful.
+pub fn normalize_offering_id(
+    s: &String,
+) -> Result<[u8; MAX_OFFERING_ID_LEN as usize], ValidatorError> {
+    let len = s.len();
+    if len == 0 || len > MAX_OFFERING_ID_LEN {
+        return Err(ValidatorError::InvalidOfferingId);
+    }
+
+    let mut buf = [0u8; MAX_OFFERING_ID_LEN as usize];
+    s.copy_into_slice(&mut buf[..len as usize]);
+    let bytes = &buf[..len as usize];
+
+    if bytes[0] == b' ' || bytes[len as usize - 1] == b' ' {
+        return Err(ValidatorError::InvalidOfferingId);
+    }
+
+    for &b in bytes {
+        if !is_valid_offering_id_byte(b) {
+            return Err(ValidatorError::InvalidOfferingId);
+        }
+    }
+
+    Ok(buf)
+}
+
+/// Return whether an offering id is accepted by the on-chain policy.
+///
+/// This is a convenience wrapper over [`normalize_offering_id`] for call
+/// sites that only need a boolean verdict and not the normalized buffer.
+pub fn is_valid_offering_id(s: &String) -> bool {
+    normalize_offering_id(s).is_ok()
+}
+
 /// Require that `amount` is strictly greater than zero.
 ///
 /// # Errors

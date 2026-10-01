@@ -1,9 +1,10 @@
-﻿# Callora Contracts
+# Callora Contracts
 
 Soroban smart contracts for the Callora API marketplace: prepaid vault (USDC) and balance deduction for pay-per-call settlement.
 
 [![CI](https://github.com/CalloraOrg/Callora-Contracts/actions/workflows/ci.yml/badge.svg)](https://github.com/CalloraOrg/Callora-Contracts/actions/workflows/ci.yml)
 [![Coverage](https://github.com/CalloraOrg/Callora-Contracts/actions/workflows/coverage.yml/badge.svg)](https://github.com/CalloraOrg/Callora-Contracts/actions/workflows/coverage.yml)
+[![Kani](https://github.com/CalloraOrg/Callora-Contracts/actions/workflows/kani.yml/badge.svg)](https://github.com/CalloraOrg/Callora-Contracts/actions/workflows/kani.yml)
 
 ## Tech stack
 
@@ -20,7 +21,7 @@ A minimal set of commands to build, test, and produce release WASM for the Sorob
 ```bash
 # 1. Format & lint (fails on any warning)
 cargo fmt --all -- --check
-cargo clippy --all-targets --all-features -- -D warnings
+cargo clippy --all-targets --all-features - -D warnings
 
 # 2. Build and run the full test suite
 cargo build
@@ -42,31 +43,54 @@ Release artifacts land in `target/wasm32-unknown-unknown/release/<crate>.wasm`. 
 
 ## What’s included
 
+See [`docs/DISTRIBUTE_VS_REVENUE_POOL.md`](docs/DISTRIBUTE_VS_REVENUE_POOL.md) for the canonical payout contract, behavioural differences, and which contract `callora-freeze` protects.
+
 ### 1. `callora-vault`
 
 The primary storage and metering contract. Holds USDC on behalf of API consumers and deducts balances on every metered call.
 
-- `init(owner, usdc_token, initial_balance, authorized_caller, min_deposit, revenue_pool, max_deduct)` — Initialize with owner and optional configuration. `initial_balance` defaults to `0`; when `> 0` the vault verifies the on-ledger USDC balance covers it. `min_deposit` defaults to `1` and must be `> 0`.
-- `deposit(caller, amount)` — Owner or allowed depositor increases ledger balance.
-- `deduct(caller, amount, request_id)` — Decrease balance for an API call; routes funds to settlement.
-- `batch_deduct(caller, items)` — Atomically process multiple deductions.
-- `set_allowed_depositor(caller, depositor)` — Owner-only; delegate deposit rights.
-- `set_authorized_caller(caller)` — Owner-only; set the address permitted to trigger deductions.
-- `pause(caller)` — Admin/owner-only; activate circuit-breaker to block deposits and deductions.
-- `nuclear_pause(caller)` — Admin-only emergency pause path. If admin is a Stellar multisig account, native account thresholds and signer weights are enforced by `require_auth`.
-- `unpause(caller)` — Admin/owner-only; deactivate circuit-breaker to restore operations.
-- `is_paused()` — View; returns current pause state.
-- `get_meta()` — View; returns `VaultMeta` (owner, balance, authorized_caller, min_deposit). Panics if uninitialized.
-- `balance()` — View; returns current USDC balance. Panics if uninitialized.
-- `get_admin()` — View; returns current admin address. Panics if uninitialized.
-- `get_usdc_token()` — View; returns USDC token contract address. Panics if uninitialized.
-- `get_max_deduct()` — View; returns configured max single-deduction (defaults to `i128::MAX`).
-- `set_max_deduct(max_deduct)` — Owner-only; updates max single-deduction limit. Requires `max_deduct > 0`.
-- `get_settlement()` — View; returns settlement address. Panics if not set.
-- `get_revenue_pool()` — View; returns `Option<Address>` revenue pool address.
-- `get_contract_addresses()` — View; returns `(usdc_token, settlement, revenue_pool)` in one call.
-- `is_authorized_depositor(caller)` — View; returns `bool`. Panics if uninitialized.
-- `dry_run_sweep_idle_balance()` — View; returns a `SweepPreview` describing the untracked on-ledger USDC surplus (`on_ledger_balance - tracked_balance`, saturating at 0). Use this to inspect what `distribute(_, _, idle_balance)` would move without committing the transfer. Read-only, no auth, no TTL bump. Returns `NotInitialized` before `init`.
+The catalogue below omits the Soroban `Env` argument. See the [vault contract interface](docs/interfaces/vault.json) for ABI types, return values, errors, and full signatures.
+
+**Initialization and metering**
+
+- `init(owner, usdc_token, initial_balance, authorized_caller, min_deposit, revenue_pool, max_deduct, settlement)` — Initialize the vault once; the last six configuration values are optional.
+- `deposit(caller, amount)` — Owner or allowlisted depositor transfers USDC into the vault.
+- `deduct(caller, amount, request_id)` — Authorized caller deducts one metered payment and routes it to settlement.
+- `batch_deduct(caller, items)` — Authorized caller atomically processes `(amount, request_id)` items.
+
+**Owner and pending-owner actions**
+
+- `set_authorized_caller(new_caller, nonce)` — Owner-authorized rotation or removal of the deduction caller, protected by a nonce.
+- `pause(caller)` / `unpause(caller)` — Owner-only direct circuit-breaker controls; both require the owner as `caller`.
+- `withdraw(amount)` / `withdraw_to(to, amount)` — Owner-authorized recovery of tracked USDC; available while paused.
+- `set_max_deduct(caller, max_deduct)` — Owner-only update of the per-deduction cap.
+- `set_settlement(caller, settlement)` — Owner-only settlement-address update.
+- `transfer_ownership(caller, new_owner)` / `accept_ownership()` — Two-step ownership transfer; acceptance is authorized by the pending owner.
+- `prune_processed_requests(caller, ids)` — Owner-only removal of processed request markers.
+- `add_address(caller, depositor)` / `clear_all(caller)` — Owner-only deposit-allowlist management.
+- `set_reserve_cap(caller, token, cap)` — Owner-only reserve-cap update for a token.
+
+**Admin and pending-admin actions**
+
+- `distribute(caller, to, amount)` — Admin-only transfer of untracked USDC surplus; available while paused.
+- `set_admin(caller, new_admin)` / `accept_admin()` — Two-step admin transfer; acceptance is authorized by the pending admin.
+- `set_timelock_window(caller, window)` — Admin-only configuration of the critical-action timelock window.
+- `set_admin_cooldown(caller, seconds)` — Admin-only configuration of the cooldown between critical executions.
+- `admin_rescue(caller, token_address, to, amount)` — Admin-only rescue of accidental token transfers; tracked USDC remains protected.
+
+The admin critical actions are timelocked. An admin first calls `propose_*`, waits until the proposal's `execute_after` timestamp, and then calls `execute_*`; `cancel_*` clears a pending proposal. Executing pause, upgrade, or sweep also observes the global admin cooldown.
+
+- `propose_pause(caller)` / `execute_pause(caller)` / `cancel_pause(caller)`
+- `propose_upgrade(caller, new_wasm_hash)` / `execute_upgrade(caller)` / `cancel_upgrade(caller)`
+- `propose_sweep(caller, to, amount)` / `execute_sweep(caller)` / `cancel_sweep(caller)`
+
+**Read-only views**
+
+- `is_paused()`; `balance()`; `get_owner()`; `get_usdc_token()`; `get_max_deduct()`; `get_settlement()`; `get_revenue_pool()`
+- `capabilities()` — Return the supported-feature bitmap.
+- `get_timelock_window()`; `get_pending_pause()`; `get_pending_upgrade()`; `get_pending_sweep()`
+- `get_admin()`; `get_admin_cooldown()`; `admin_cooldown_remaining()`; `is_admin_action_ready()`; `get_last_critical_admin_action()`
+- `is_request_processed(request_id)`; `is_authorized_depositor(caller)`; `get_allowlist()`; `get_reserve_cap(token)`
 
 ## Architecture & Flow
 
@@ -105,14 +129,14 @@ sequenceDiagram
 
    ```bash
    cargo fmt --all
-   cargo clippy --all-targets --all-features -- -D warnings
+   cargo clippy --all-targets --all-features - -D warnings
    cargo build
    cargo test --workspace
    ```
 
 3. **Build WASM:**
 
-   ```bash
+   ``bash
    # Build all publishable contract crates and verify their release WASM sizes
    ./scripts/check-wasm-size.sh
 
@@ -122,7 +146,7 @@ sequenceDiagram
 
 ## Development
 
-Use one branch per issue or feature. Run `cargo fmt --all`, `cargo clippy --all-targets --all-features -- -D warnings`, `cargo test --workspace`, and `./scripts/check-wasm-size.sh` before pushing so every publishable contract stays within Soroban's WASM size limit.
+Use one branch per issue or feature. Run `cargo fmt --all`, `cargo clippy --all-targets --all-features - -D warnings`, `cargo test --workspace`, and `./scripts/check-wasm-size.sh` before pushing so every publishable contract stays within Soroban's WASM size limit.
 
 ### Test coverage
 
@@ -137,25 +161,26 @@ The project enforces a **minimum of 95% line coverage** on every push via GitHub
 
 ```
 callora-contracts/
-â”œâ”€â”€ .github/workflows/
-â”‚   â”œâ”€â”€ ci.yml              # CI: workspace fmt gate, clippy, test, WASM build
-â”‚   â””â”€â”€ coverage.yml        # CI: enforces 95% coverage on every push
-â”œâ”€â”€ contracts/
-â”‚   â”œâ”€â”€ vault/              # Primary storage and metering
-â”‚   â”œâ”€â”€ revenue_pool/       # Simple revenue distribution
-â”‚   â””â”€â”€ settlement/         # Advanced balance tracking
-â”œâ”€â”€ scripts/
-â”‚   â”œâ”€â”€ coverage.sh         # Local coverage runner
-â”‚   â””â”€â”€ check-wasm-size.sh  # WASM size verification
-â”œâ”€â”€ docs/
-â”‚   â”œâ”€â”€ interfaces/                        # JSON contract interface summaries
-â”‚   â”œâ”€â”€ ACCESS_CONTROL.md                  # Role-based access control overview
-â”‚   â””â”€â”€ CONTRACT_ADDRESS_CONFIGURATION.md  # Operator guide: configure contract addresses
-â”œâ”€â”€ BENCHMARKS.md           # Gas/cost notes
-â”œâ”€â”€ EVENT_SCHEMA.md         # Event topics and payloads
-â”œâ”€â”€ UPGRADE.md              # Upgrade and migration path
-â”œâ”€â”€ SECURITY.md             # Security checklist
-â””â”€â”€ tarpaulin.toml          # cargo-tarpaulin configuration
+├── .github/workflows/
+│   ├── ci.yml              # CI: workspace fmt gate, clippy, test, WASM build
+│   └── coverage.yml        # CI: enforces 95% coverage on every push
+├── contracts/
+│   ├── vault/              # Primary storage and metering
+│   ├── revenue_pool/       # Simple revenue distribution
+│   └── settlement/         # Advanced balance tracking
+├── scripts/
+│   ├── coverage.sh         # Local coverage runner
+│   └── check-wasm-size.sh  # WASM size verification
+├── docs/
+│   ├── interfaces/                        # JSON contract interface summaries
+│   ├── ACCESS_CONTROL.md                  # Role-based access control overview
+│   ├── DISTRIBUTE_VS_REVENUE_POOL.md      # Canonical payout contract and behavioural differences
+│   └── CONTRACT_ADDRESS_CONFIGURATION.md  # Operator guide: configure contract addresses
+├── BENCHMARKS.md           # Gas/cost notes
+├── EVENT_SCHEMA.md         # Event topics and payloads
+├── UPGRADE.md              # Upgrade and migration path
+├── SECURITY.md             # Security checklist
+└── tarpaulin.toml          # cargo-tarpaulin configuration
 ```
 
 ## Contract interface summaries
@@ -175,20 +200,73 @@ See [`docs/interfaces/README.md`](docs/interfaces/README.md) for the schema desc
 Backend operators setting up a new deployment should follow the step-by-step checklist in
 [`docs/CONTRACT_ADDRESS_CONFIGURATION.md`](docs/CONTRACT_ADDRESS_CONFIGURATION.md).
 It covers deploying and linking the USDC token, settlement contract, and revenue pool,
-plus how to verify all addresses with the `get_contract_addresses()` view function.
+plus how to verify them with the vault's individual address view functions.
+
+## Formal Verification (Kani)
+
+The `callora-vault` crate ships bounded model-checking harnesses using [Kani](https://model-checking.github.io/kani/).
+Harnesses are compiled only under `cargo kani` (gated with `#[cfg(kani)]`) and have zero impact on normal builds or `cargo test`.
+
+### What is proved
+
+| Harness | File | Property |
+|---|---|---|
+| `kani_deduct_balance_non_negative` | `src/kani_proofs.rs` | No underflow after a valid `deduct` call |
+| `kani_deduct_strictly_reduces_balance` | `src/kani_proofs.rs` | `deduct` always strictly reduces the balance |
+| `kani_deduct_request_id_transparent` | `src/kani_proofs.rs` | `request_id: u64` has no effect on balance arithmetic |
+| `kani_deposit_no_overflow` | `src/kani_proofs.rs` | `deposit` never overflows `i128` for valid inputs |
+| `kani_deposit_overflow_detected` | `src/kani_proofs.rs` | `checked_add` correctly detects overflow |
+| `kani_max_deduct_enforced` | `src/kani_proofs.rs` | Guard rejects `amount > max_deduct` before touching balance |
+| `kani_batch_deduct_total_no_overflow` | `src/kani_proofs.rs` | `batch_deduct` running-total over `Vec<(i128, u64)>` is sound |
+| `kani_withdraw_balance_non_negative` | `src/kani_proofs.rs` | `withdraw` never underflows |
+| `kani_deduct_conserves_total_supply` | `proofs/deduct.rs` | Successful `deduct` conserves the vault + settlement accounting total |
+| `kani_deduct_request_id_conserves_total` | `proofs/deduct.rs` | Conservation invariant holds across all `request_id: u64` values |
+| `kani_batch_deduct_conserves_total_supply` | `proofs/deduct.rs` | 2-item `batch_deduct` conserves the accounting total |
+
+### Running locally
+
+```bash
+# Install Kani (one-time; ~300 MB)
+cargo install --locked cargo-kani
+
+# Run all vault harnesses
+cargo kani -p callora-vault
+
+# Run a single named harness
+cargo kani -p callora-vault --harness kani_deduct_balance_non_negative
+```
+
+### CI workflow
+
+Harnesses run automatically on every push/PR that touches `contracts/vault/src/kani_proofs.rs`, `contracts/vault/proofs/deduct.rs`, or `contracts/vault/src/lib.rs` via [`.github/workflows/kani.yml`](.github/workflows/kani.yml).
+
+The job is currently `continue-on-error: true` (non-blocking).  Once the harness suite has been stable for two release cycles it will be promoted to a required check.
+
+### Module structure
+
+```
+contracts/vault/
+├── src/
+│   ├── kani_proofs.rs      # #[cfg(kani)] mod proofs — 8 pure arithmetic harnesses
+│   └── lib.rs              # #[cfg(kani)] mod kani_proofs; declaration
+└── proofs/
+    └── deduct.rs           # DeductState model + 3 conservation harnesses + unit tests
+                            # Included as mod deduct_proofs under #[cfg(any(kani, test))]
+```
 
 ## Security Notes
 
 - **Checked arithmetic**: All balance mutations use `checked_add` / `checked_sub` with explicit panics.
 - **Input validation**: `amount > 0` enforced on all deposits and deductions.
 - **Overflow checks**: Enabled in both dev and release profiles (`Cargo.toml`).
-- **Role-Based Access**: Documented in [docs/ACCESS_CONTROL.md](docs/ACCESS_CONTROL.md).
-- **Revenue pool admin audit trail**: `callora-revenue-pool::set_admin` now emits `admin_changed` with `(old_admin, new_admin)` before transfer nomination.
+- \*\*Role-Based Access\*\**: Documented in [docs/ACCESS_CONTROL.md](docs/ACCESS_CONTROL.md).
+- **Revenue pool admin audit trail**: `callora-revenue-pool` emits `admin_transfer_started` when an admin is nominated, and `admin_changed` with `(old_admin, new_admin)` only when the nominee accepts — a cancelled transfer emits no change event.
 - **Dedup hardening**: Duplicate `get_max_deduct` declaration removed in `callora-vault`; allowed depositor duplicate-path test now asserts list cardinality.
-- **Emergency drain (Multisig + timelock)**: `callora-revenue-pool` now exposes `propose_emergency_drain`, `execute_emergency_drain`, `cancel_emergency_drain`, and `get_pending_emergency_drain`. A proposal stores a `PendingEmergencyDrain` snapshot; execution is gated behind a 24-hour timelock (`EMERGENCY_DRAIN_TIMELOCK_SECONDS = 86 400`). When the admin is a Stellar multisig account, `require_auth` enforces the native multi-signature threshold automatically.
+- \*\*Emergency drain (Multisig + timelock)\*\*: `callora-revenue-pool` now exposes `propose_emergency_drain`, `execute_emergency_drain`, `cancel_emergency_drain`, and `get_pending_emergency_drain`. A proposal stores a `PendingEmergencyDrain` snapshot; execution is gated behind a 24-hour timelock (`EMERGENCY_DRAIN_TIMECLOCK_SECONDS = 86 400`). When the admin is a Stellar multisig account, `require_auth` enforces the native multi-signature threshold automatically.
 
 See [SECURITY.md](SECURITY.md) for the full Vault Security Checklist and audit recommendations.
 
 ---
 
 Part of [Callora](https://github.com/CalloraOrg).
+...

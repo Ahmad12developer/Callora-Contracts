@@ -74,7 +74,11 @@ fn setup_full(
 fn vault_events(
     env: &Env,
     vault_addr: &Address,
-) -> std::vec::Vec<(Address, soroban_sdk::Vec<soroban_sdk::Val>, soroban_sdk::Val)> {
+) -> std::vec::Vec<(
+    Address,
+    soroban_sdk::Vec<soroban_sdk::Val>,
+    soroban_sdk::Val,
+)> {
     env.events()
         .all()
         .iter()
@@ -94,7 +98,11 @@ fn set_timelock_window_emits_exactly_one_event_with_correct_topic() {
     client.set_timelock_window(&owner, &(2 * 24 * 60 * 60));
 
     let events = env.events().all();
-    assert_eq!(events.len(), 1, "set_timelock_window must emit exactly one event");
+    assert_eq!(
+        events.len(),
+        1,
+        "set_timelock_window must emit exactly one event"
+    );
     let (_, topics, _) = events.last().unwrap();
     let t0: Symbol = topics.get(0).unwrap().into_val(&env);
     assert_eq!(topics.len(), 3, "expected (name, version, caller) topics");
@@ -173,7 +181,9 @@ macro_rules! assert_vault_events_versioned {
             assert!(
                 topics.len() >= 2,
                 "{}: vault event[{}] has {} topic(s); need >= 2",
-                $label, idx, topics.len()
+                $label,
+                idx,
+                topics.len()
             );
             let t1: Symbol = topics.get(1).unwrap().into_val(&$env);
             assert_eq!(
@@ -284,8 +294,8 @@ fn event_version_shape_set_reserve_cap() {
 fn event_version_shape_request_id_pruned() {
     let env = Env::default();
     let (owner, vault, client, _) = setup_full(&env);
-    let req_id = Symbol::new(&env, "prune1");
-    let key = StorageKey::ProcessedRequest(req_id.clone());
+    let req_id: u64 = 1;
+    let key = StorageKey::ProcessedRequest(req_id);
     env.as_contract(&vault, || {
         env.storage().persistent().set(&key, &true);
     });
@@ -351,11 +361,11 @@ fn lifecycle_all_events_carry_version_topic() {
     assert_vault_events_versioned!(env, vault, "admin_rescue");
 
     // prune_processed_requests (seed a marker manually)
-    let prune_id = Symbol::new(&env, "lc_prune1");
+    let prune_id: u64 = 2;
     env.as_contract(&vault, || {
         env.storage()
             .persistent()
-            .set(&StorageKey::ProcessedRequest(prune_id.clone()), &true);
+            .set(&StorageKey::ProcessedRequest(prune_id), &true);
     });
     client.prune_processed_requests(&owner, &soroban_sdk::vec![&env, prune_id]);
     assert_vault_events_versioned!(env, vault, "prune_processed_requests");

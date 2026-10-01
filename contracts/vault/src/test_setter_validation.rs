@@ -82,7 +82,7 @@ fn set_settlement_vault_address_fails() {
     let env = Env::default();
     let (vault_addr, client, _, admin) = setup(&env);
     let result = client.try_set_settlement(&admin, &vault_addr);
-    assert!(result.is_err());
+    assert_eq!(result, Err(Ok(VaultError::SettlementCannotBeVault)));
 }
 
 #[test]
@@ -90,7 +90,7 @@ fn set_settlement_usdc_address_fails() {
     let env = Env::default();
     let (_, client, usdc, admin) = setup(&env);
     let result = client.try_set_settlement(&admin, &usdc);
-    assert!(result.is_err());
+    assert_eq!(result, Err(Ok(VaultError::SettlementCannotBeToken)));
 }
 
 #[test]
@@ -109,9 +109,114 @@ fn set_settlement_equals_revenue_pool_fails() {
 fn set_settlement_valid_address_succeeds() {
     let env = Env::default();
     let (_, client, _, admin) = setup(&env);
-    let s = Address::generate(&env);
+    let new_settlement = Address::generate(&env);
+    client.set_settlement(&admin, &new_settlement);
+    assert_eq!(client.get_settlement(), new_settlement);
+}
 
-    assert_eq!(client.get_settlement(), s);
+#[test]
+fn set_settlement_emits_event_with_old_and_new() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let (vault_addr, vault_client) = {
+        let addr = env.register(CalloraVault, ());
+        (addr.clone(), CalloraVaultClient::new(&env, &addr))
+    };
+    let (usdc, _) = {
+        let ca = env.register_stellar_asset_contract_v2(admin.clone());
+        let addr = ca.address();
+        (addr.clone(), soroban_sdk::token::StellarAssetClient::new(&env, &addr))
+    };
+    let initial_settlement = Address::generate(&env);
+    vault_client.init(
+        &admin,
+        &usdc,
+        &0,
+        &admin,
+        &1,
+        &None,
+        &10_000_000_000,
+        &initial_settlement,
+    );
+
+    let new_settlement = Address::generate(&env);
+    vault_client.set_settlement(&admin, &new_settlement);
+
+    // Inspect all events and find the `set_settlement` one.
+    let all_events = env.events().all();
+    let set_settlement_sym = Symbol::new(&env, "set_settlement");
+    let version_sym = Symbol::new(&env, "callora.v1");
+
+    let matched = all_events.iter().find(|(_, topics, _)| {
+        topics.len() >= 2
+            && topics.get(0).map(|t| t == set_settlement_sym.into_val(&env)).unwrap_or(false)
+            && topics.get(1).map(|t| t == version_sym.into_val(&env)).unwrap_or(false)
+    });
+    assert!(matched.is_some(), "set_settlement event not emitted");
+
+    let (_, _, data) = matched.unwrap();
+    // data should be (Option<Address>, Address) == (Some(initial_settlement), new_settlement)
+    let (old_val, new_val): (Option<Address>, Address) = data.into_val(&env);
+    assert_eq!(old_val, Some(initial_settlement));
+    assert_eq!(new_val, new_settlement);
+}
+
+#[test]
+fn set_settlement_exactly_one_event_emitted() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let (_, vault_client) = {
+        let addr = env.register(CalloraVault, ());
+        (addr.clone(), CalloraVaultClient::new(&env, &addr))
+    };
+    let (usdc, _) = {
+        let ca = env.register_stellar_asset_contract_v2(admin.clone());
+        let addr = ca.address();
+        (addr.clone(), soroban_sdk::token::StellarAssetClient::new(&env, &addr))
+    };
+    let initial_settlement = Address::generate(&env);
+    vault_client.init(
+        &admin,
+        &usdc,
+        &0,
+        &admin,
+        &1,
+        &None,
+        &10_000_000_000,
+        &initial_settlement,
+    );
+
+    // Clear events accumulated during init.
+    let events_before = env.events().all().len();
+    let new_settlement = Address::generate(&env);
+    vault_client.set_settlement(&admin, &new_settlement);
+
+    let set_settlement_sym = Symbol::new(&env, "set_settlement");
+    let count = env
+        .events()
+        .all()
+        .iter()
+        .skip(events_before as usize)
+        .filter(|(_, topics, _)| {
+            topics
+                .get(0)
+                .map(|t| t == set_settlement_sym.into_val(&env))
+                .unwrap_or(false)
+        })
+        .count();
+    assert_eq!(count, 1, "expected exactly one set_settlement event");
+}
+
+#[test]
+fn set_settlement_unauthorized_caller_fails() {
+    let env = Env::default();
+    let (_, client, _, _admin) = setup(&env);
+    let not_owner = Address::generate(&env);
+    let new_settlement = Address::generate(&env);
+    let result = client.try_set_settlement(&not_owner, &new_settlement);
+    assert_eq!(result, Err(Ok(VaultError::Unauthorized)));
 }
 
 #[test]

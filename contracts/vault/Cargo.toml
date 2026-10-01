@@ -15,5 +15,6 @@ callora-validators = { path = "../validators" }
 [dev-dependencies]
 soroban-sdk = { workspace = true, features = ["testutils"] }
 rand = "0.8"
+proptest = { version = "1", default-features = false, features = ["std", "alloc"] }
 callora-settlement = { path = "../settlement" }
 callora-revenue-pool = { path = "../revenue_pool" }

@@ -232,8 +232,7 @@ fn reentrancy_reentrant_call_observes_zero_balance() {
     // (transfer), the re-entrant call found balance = 0 and was rejected.
     let final_balance = client.get_developer_balance(&developer, &token_addr);
     assert_eq!(
-        final_balance,
-        0,
+        final_balance, 0,
         "balance must be 0 after single drain; got {final_balance} — \
          non-zero means the reentrancy guard is ineffective"
     );
@@ -295,8 +294,7 @@ fn reentrancy_daily_counter_persisted_before_transfer() {
     // (300 + 300 = 600 > cap of 500).  Remaining balance must be 700.
     let remaining = client.get_developer_balance(&developer, &token_addr);
     assert_eq!(
-        remaining,
-        700,
+        remaining, 700,
         "balance after single 300-unit withdrawal must be 700; \
          got {remaining} — if 600 were drained the daily counter was not persisted before transfer"
     );
@@ -304,8 +302,7 @@ fn reentrancy_daily_counter_persisted_before_transfer() {
     // Daily counter must reflect exactly 300 withdrawn.
     let withdrawn = client.get_withdrawal_today(&developer);
     assert_eq!(
-        withdrawn,
-        300,
+        withdrawn, 300,
         "daily counter must show 300 (one successful withdrawal); got {withdrawn}"
     );
 }

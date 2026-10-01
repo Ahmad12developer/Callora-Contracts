@@ -201,8 +201,7 @@ fn gas_snap_set_developer_min_balance() {
 fn gas_snap_set_minimum_balance() {
     let f = setup_settlement();
     measure_snap!(f.env, snap, {
-        f.client
-            .set_minimum_balance(&f.admin, &f.developer, &100);
+        f.client.set_minimum_balance(&f.admin, &f.developer, &100);
     });
     assert_within_budget(
         "callora-limits",
@@ -326,13 +325,7 @@ fn gas_snap_get_max_distribute() {
     measure_snap!(f.env, snap, {
         let _ = f.client.get_max_distribute();
     });
-    assert_within_budget(
-        "callora-limits",
-        "get_max_distribute",
-        snap,
-        100_000,
-        1_500,
-    );
+    assert_within_budget("callora-limits", "get_max_distribute", snap, 100_000, 1_500);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -353,10 +346,7 @@ fn gas_snap_snapshot_nonzero_sanity() {
 /// Boundary comparison helper assertions without panic.
 #[test]
 fn gas_snap_boundary_comparisons() {
-    let snap = ProfileSnapshot {
-        cpu: 100,
-        mem: 200,
-    };
+    let snap = ProfileSnapshot { cpu: 100, mem: 200 };
     assert!(!snap.cpu_exceeds(100));
     assert!(!snap.mem_exceeds(200));
     assert!(snap.cpu_exceeds(99));

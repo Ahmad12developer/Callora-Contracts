@@ -22,7 +22,7 @@
 
 extern crate std;
 
-use soroban_sdk::testutils::{Address as _, Ledger as _};
+use soroban_sdk::testutils::{Address as _, Events as _, Ledger as _};
 use soroban_sdk::{token, Address, Env, Error, InvokeError, Vec};
 
 use super::*;
@@ -345,14 +345,15 @@ fn deduct_without_settlement_returns_error_before_mutation() {
     let env = Env::default();
     let (client, owner, usdc) = setup_vault_with_optional_settlement(&env, None);
     env.mock_all_auths();
-    let event_count = env.events().all().len();
 
     let result = client.try_deduct(&owner, &100i128, &1u64);
 
     assert!(is_vault_err(result, VaultError::SettlementNotSet as u32));
     assert_eq!(client.balance(), 1_000);
     assert_eq!(usdc.balance(&client.address), 1_000);
-    assert_eq!(env.events().all().len(), event_count);
+    // A failed top-level invocation rolls the event buffer back; no vault
+    // event may survive it.
+    assert!(env.events().all().is_empty());
 }
 
 #[test]
@@ -360,7 +361,6 @@ fn batch_deduct_without_settlement_returns_error_before_mutation() {
     let env = Env::default();
     let (client, owner, usdc) = setup_vault_with_optional_settlement(&env, None);
     env.mock_all_auths();
-    let event_count = env.events().all().len();
     let items = items_from(&env, &[100]);
 
     let result = client.try_batch_deduct(&owner, &items);
@@ -368,15 +368,16 @@ fn batch_deduct_without_settlement_returns_error_before_mutation() {
     assert!(is_vault_err(result, VaultError::SettlementNotSet as u32));
     assert_eq!(client.balance(), 1_000);
     assert_eq!(usdc.balance(&client.address), 1_000);
-    assert_eq!(env.events().all().len(), event_count);
+    // A failed top-level invocation rolls the event buffer back; no vault
+    // event may survive it.
+    assert!(env.events().all().is_empty());
 }
 
 #[test]
 fn deduct_and_batch_deduct_without_usdc_return_not_initialized() {
     let env = Env::default();
     let settlement = Address::generate(&env);
-    let (client, owner, usdc) =
-        setup_vault_with_optional_settlement(&env, Some(settlement));
+    let (client, owner, usdc) = setup_vault_with_optional_settlement(&env, Some(settlement));
     env.as_contract(&client.address, || {
         env.storage().instance().remove(&DataKey::UsdcToken);
     });
@@ -555,7 +556,7 @@ fn cancel_sweep_before_execution_conserves_value() {
     // Sweep is the vault's cold-storage/surplus "settlement"; it is timelocked
     // and cancellable. Cancelling a pending sweep must not move any value.
     let env = Env::default();
-    let (client, owner, usdc, _, settlement) = setup_funded_vault(&env, 100, 100, 1_000);
+    let (client, owner, usdc, _, settlement) = setup_funded_vault(&env, 100, 140, 1_000);
     env.mock_all_auths();
 
     let recipient = Address::generate(&env);
@@ -580,7 +581,7 @@ fn cancel_sweep_before_execution_conserves_value() {
 #[test]
 fn execute_sweep_conserves_value_to_recipient() {
     let env = Env::default();
-    let (client, owner, usdc, _, _settlement) = setup_funded_vault(&env, 100, 100, 1_000);
+    let (client, owner, usdc, _, _settlement) = setup_funded_vault(&env, 100, 140, 1_000);
     env.mock_all_auths();
 
     let recipient = Address::generate(&env);
@@ -595,6 +596,98 @@ fn execute_sweep_conserves_value_to_recipient() {
     assert!(client.try_execute_sweep(&owner).is_ok()); // 40 moved to recipient, tracked balance untouched by sweep (sweep recovers
                                                        // on-ledger surplus, it does not touch `DataKey::Balance`).
     assert_eq!(usdc.balance(&recipient), 40);
-    assert_eq!(usdc.balance(&vault), 60);
+    assert_eq!(usdc.balance(&vault), 100);
     assert_eq!(client.balance(), 100);
+}
+
+#[test]
+fn propose_sweep_fails_when_amount_exceeds_current_surplus() {
+    let env = Env::default();
+    // Tracked = 100, on-ledger = 140 -> surplus = 40.
+    let (client, owner, _usdc, _, _settlement) = setup_funded_vault(&env, 100, 140, 1_000);
+    env.mock_all_auths();
+
+    let recipient = Address::generate(&env);
+    // Amount 41 exceeds surplus of 40 -> must fail with InsufficientBalance.
+    let res = client.try_propose_sweep(&owner, &recipient, &41i128);
+    assert!(is_vault_err(res, VaultError::InsufficientBalance as u32));
+    assert!(client.get_pending_sweep().is_none());
+}
+
+#[test]
+fn execute_sweep_fails_when_surplus_drops_below_amount_after_proposal() {
+    let env = Env::default();
+    // Tracked = 100, on-ledger = 140 -> surplus = 40.
+    let (client, owner, usdc, _, _settlement) = setup_funded_vault(&env, 100, 140, 1_000);
+    env.mock_all_auths();
+
+    let recipient = Address::generate(&env);
+    assert!(client
+        .try_propose_sweep(&owner, &recipient, &40i128)
+        .is_ok());
+
+    // Reduce surplus before execution by distributing 10 surplus USDC to another address
+    let other = Address::generate(&env);
+    client.distribute(&owner, &other, &10i128);
+    // Now on-ledger = 130, tracked = 100 -> surplus = 30 < 40.
+
+    env.ledger().set_timestamp(1_000_000);
+    let res = client.try_execute_sweep(&owner);
+    assert!(is_vault_err(res, VaultError::InsufficientBalance as u32));
+
+    // Proposal must NOT be consumed, tracked balance untouched, surplus untouched
+    assert!(client.get_pending_sweep().is_some());
+    assert_eq!(client.balance(), 100);
+    assert_eq!(usdc.balance(&client.address), 130);
+}
+
+#[test]
+fn successful_sweep_leaves_balance_untouched() {
+    let env = Env::default();
+    // Tracked = 500, on-ledger = 800 -> surplus = 300.
+    let (client, owner, usdc, _, _settlement) = setup_funded_vault(&env, 500, 800, 1_000);
+    env.mock_all_auths();
+
+    let recipient = Address::generate(&env);
+    assert!(client
+        .try_propose_sweep(&owner, &recipient, &200i128)
+        .is_ok());
+
+    env.ledger().set_timestamp(1_000_000);
+    assert!(client.try_execute_sweep(&owner).is_ok());
+
+    // Tracked balance must remain exactly 500 (untouched).
+    assert_eq!(client.balance(), 500);
+    // On-ledger USDC balance drops by 200 (800 -> 600).
+    assert_eq!(usdc.balance(&client.address), 600);
+    assert_eq!(usdc.balance(&recipient), 200);
+}
+
+#[test]
+fn withdrawal_between_proposal_and_execution_specifically() {
+    let env = Env::default();
+    // Tracked = 100, on-ledger = 140 -> surplus = 40.
+    let (client, owner, usdc, _, _settlement) = setup_funded_vault(&env, 100, 140, 1_000);
+    env.mock_all_auths();
+
+    let recipient = Address::generate(&env);
+    // Propose sweeping the maximum surplus (40).
+    assert!(client
+        .try_propose_sweep(&owner, &recipient, &40i128)
+        .is_ok());
+
+    // Intervening operation reduces available surplus (e.g. distribute 15 surplus USDC).
+    let drain_addr = Address::generate(&env);
+    client.distribute(&owner, &drain_addr, &15i128);
+    // Surplus is now 125 - 100 = 25.
+
+    // Advance time past timelock window.
+    env.ledger().set_timestamp(1_000_000);
+
+    // Execution must fail without consuming proposal or modifying tracked balance.
+    let res = client.try_execute_sweep(&owner);
+    assert!(is_vault_err(res, VaultError::InsufficientBalance as u32));
+    assert!(client.get_pending_sweep().is_some());
+    assert_eq!(client.balance(), 100);
+    assert_eq!(usdc.balance(&client.address), 125);
 }

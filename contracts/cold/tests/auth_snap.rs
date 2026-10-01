@@ -21,11 +21,11 @@ fn capabilities_does_not_require_auth() {
 }
 
 #[test]
-fn capabilities_returns_nonzero() {
+fn capabilities_returns_empty_without_auth() {
     let env = Env::default();
     let client = create_contract(&env);
 
-    assert_ne!(client.capabilities(), 0);
+    assert_eq!(client.capabilities(), 0);
 }
 
 #[test]

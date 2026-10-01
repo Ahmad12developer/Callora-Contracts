@@ -1882,7 +1882,7 @@ fn nomination_event_carries_the_acceptance_window() {
 // when acceptance is rejected due to expiry or early timing.
 
 /// **Issue #1047**: Rejection at exact expiry must not mutate state.
-/// 
+///
 /// When a nomination expires at precisely `expires_at`, attempting acceptance
 /// at `expires_at + 1` fails with `ERR_NOMINATION_EXPIRED`. The critical check:
 /// no state is changed, no events are emitted, the pending slot remains intact.
@@ -1933,7 +1933,11 @@ fn expiry_rejection_preserves_pending_slot() {
 
     // Verify no admin_changed event was emitted
     let changed_events = events_with_topic(&env, "admin_changed");
-    assert_eq!(changed_events.len(), 0, "no admin_changed event on expiry rejection");
+    assert_eq!(
+        changed_events.len(),
+        0,
+        "no admin_changed event on expiry rejection"
+    );
 }
 
 /// **Issue #1047**: Early acceptance (before ETA) leaves state intact.
@@ -2010,11 +2014,18 @@ fn successful_acceptance_emits_event_post_commit() {
 
     // Event must exist
     let changed_events = events_with_topic(&env, "admin_changed");
-    assert_eq!(changed_events.len(), 1, "must emit exactly one admin_changed");
+    assert_eq!(
+        changed_events.len(),
+        1,
+        "must emit exactly one admin_changed"
+    );
 
     // Verify state reflects the commitment
     assert_eq!(h_admin(&env, &id), Some(new_admin.clone()));
-    assert!(h_pending(&env, &id).is_none(), "pending slot cleared after accept");
+    assert!(
+        h_pending(&env, &id).is_none(),
+        "pending slot cleared after accept"
+    );
 }
 
 /// **Issue #1047**: Repeated acceptance of same nomination fails atomically.
@@ -2109,7 +2120,10 @@ fn renomination_restarts_the_clock() {
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         h_accept_admin(&env, &id, &nominee_a);
     }));
-    assert!(result.is_err(), "old nominee cannot accept after renomination");
+    assert!(
+        result.is_err(),
+        "old nominee cannot accept after renomination"
+    );
 
     // Verify B is still the pending nominee
     assert_eq!(h_pending(&env, &id), Some(nominee_b.clone()));
@@ -2150,4 +2164,3 @@ fn acceptance_idempotence_fails_safely() {
         "failed acceptance must not emit additional events"
     );
 }
-

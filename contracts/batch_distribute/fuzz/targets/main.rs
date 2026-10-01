@@ -52,7 +52,7 @@ use soroban_sdk::testutils::Address as _;
 use soroban_sdk::token::StellarAssetClient;
 use soroban_sdk::{Address, Env, Vec as SorobanVec};
 
-use callora_distribute::{Distribute, DistributeClient, limits};
+use callora_distribute::{limits, Distribute, DistributeClient};
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -503,4 +503,3 @@ fuzz_target!(|data: &[u8]| {
     assert_eq!(contract.get_paused(), paused, "final: paused out of sync");
     assert!(contract.balance() >= 0, "final: negative balance");
 });
-

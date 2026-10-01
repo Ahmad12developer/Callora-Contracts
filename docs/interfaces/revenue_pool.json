@@ -248,6 +248,16 @@
     },
 
     {
+      "name": "get_ttl_policy",
+      "description": "Return the TTL policy (threshold and bump_amount) this contract applies to each storage category. Reports policy constants only: a contract cannot observe the remaining TTL of a ledger entry, so TtlPolicy deliberately has no live ttl field. Read live TTLs over Soroban RPC getLedgerEntries and compare liveUntilLedgerSeq against latestLedger; see docs/STORAGE_TTL_DOCTOR.md. Renamed from get_storage_ttl, whose ttl field was the live instance TTL under cfg(test) but the constant BUMP_AMOUNT in production builds.",
+      "access": "any",
+      "params": [],
+      "returns": "Vec<TtlPolicy>",
+      "panics": [],
+      "events": []
+    },
+
+    {
       "name": "get_admin",
       "description": "Return the current admin address.",
       "access": "any",
@@ -505,6 +515,16 @@
         "amount": { "type": "i128", "description": "USDC amount in base units to drain." },
         "proposed_at": { "type": "u64", "description": "Ledger timestamp (seconds) when the proposal was created." },
         "execute_after": { "type": "u64", "description": "Earliest ledger timestamp at which execute_emergency_drain may succeed. Equals proposed_at + 86400." }
+      }
+    },
+    "TtlPolicy": {
+      "description": "TTL policy the revenue pool applies to one storage category. Deliberately carries no live ttl field: contract code cannot read an entry's remaining TTL, so live TTLs come from Soroban RPC getLedgerEntries (docs/STORAGE_TTL_DOCTOR.md).",
+      "fields": {
+        "category": { "type": "String", "description": "Storage category name, e.g. \"Instance\"." },
+        "key_desc": { "type": "String", "description": "Human-readable description of the keys this policy covers." },
+        "storage_type": { "type": "String", "description": "Soroban storage tier: \"Instance\", \"Persistent\" or \"Temporary\"." },
+        "threshold": { "type": "u32", "description": "Remaining TTL (in ledgers) below which the contract extends the entry." },
+        "bump_amount": { "type": "u32", "description": "TTL (in ledgers) the entry is extended to once the threshold is crossed." }
       }
     }
   }

@@ -28,7 +28,9 @@ extern crate std;
 
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
-use callora_hot::{CalloraHot, CalloraHotClient, HotError, ACTION_PAUSE, ACTION_ROTATE, ACTION_UNPAUSE};
+use callora_hot::{
+    CalloraHot, CalloraHotClient, HotError, ACTION_PAUSE, ACTION_ROTATE, ACTION_UNPAUSE,
+};
 use libfuzzer_sys::fuzz_target;
 use soroban_sdk::testutils::{Address as _, Ledger as _};
 use soroban_sdk::{Address, Env, Symbol};
@@ -229,8 +231,9 @@ fn run_sequence(ops: &[HotOp]) {
                     continue;
                 }
                 let new_signer = Address::generate(&env);
-                let result =
-                    catch_unwind(AssertUnwindSafe(|| client.rotate_signer(&current_admin, &new_signer)));
+                let result = catch_unwind(AssertUnwindSafe(|| {
+                    client.rotate_signer(&current_admin, &new_signer)
+                }));
                 if result.is_ok() {
                     current_signer = new_signer;
                     assert_eq!(client.get_signer(), current_signer);
@@ -242,8 +245,9 @@ fn run_sequence(ops: &[HotOp]) {
                     continue;
                 }
                 let target = Address::generate(&env);
-                let result =
-                    catch_unwind(AssertUnwindSafe(|| client.rotate_signer(&intruder, &target)));
+                let result = catch_unwind(AssertUnwindSafe(|| {
+                    client.rotate_signer(&intruder, &target)
+                }));
                 assert!(result.is_err(), "unauthorized rotate must fail");
                 assert_eq!(client.get_signer(), current_signer);
             }
@@ -271,8 +275,7 @@ fn run_sequence(ops: &[HotOp]) {
                 if !initialized {
                     continue;
                 }
-                let result =
-                    catch_unwind(AssertUnwindSafe(|| client.set_cooldown(&intruder, &60)));
+                let result = catch_unwind(AssertUnwindSafe(|| client.set_cooldown(&intruder, &60)));
                 assert!(result.is_err(), "unauthorized set_cooldown must fail");
             }
 
@@ -281,8 +284,9 @@ fn run_sequence(ops: &[HotOp]) {
                     continue;
                 }
                 let new_admin = Address::generate(&env);
-                let result =
-                    catch_unwind(AssertUnwindSafe(|| client.set_admin(&current_admin, &new_admin)));
+                let result = catch_unwind(AssertUnwindSafe(|| {
+                    client.set_admin(&current_admin, &new_admin)
+                }));
                 if result.is_ok() {
                     // Nomination stored; current_admin unchanged until accept.
                     assert_eq!(client.get_pending_admin(), Some(new_admin));

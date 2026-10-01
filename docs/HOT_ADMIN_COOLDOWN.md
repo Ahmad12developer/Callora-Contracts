@@ -60,7 +60,7 @@ it is independent of block cadence.
 | `get_cooldown() -> u64` | — (view) | — | Current window in seconds. |
 | `cooldown_remaining(action) -> u64` | — (view) | — | Seconds until `action` is available (0 = now). |
 | `is_ready(action) -> bool` | — (view) | — | Whether `action` may run now. |
-| `pause(caller)` | admin | `"pause"` | Activate the circuit-breaker. Returns `AlreadyPaused` when already paused. |
+| `pause(caller)` | admin | **none** | Activate the circuit-breaker. Always available immediately. Returns `AlreadyPaused` when already paused. |
 | `unpause(caller)` | admin | `"unpause"` | Deactivate the circuit-breaker. Returns `NotPaused` when not paused. |
 | `is_paused() -> bool` | — (view) | — | Current pause state. |
 | `rotate_signer(caller, new_signer)` | admin | `"rotate"` | Replace the hot signer. |
@@ -78,22 +78,38 @@ The `pause.rs` module exposes three functions:
 
 ```rust
 pub fn is_paused(env: &Env) -> bool
-pub fn do_pause(env: &Env, caller: &Address, action: &Symbol) -> Result<(), HotError>
+pub fn do_pause(env: &Env, caller: &Address) -> Result<(), HotError>
 pub fn do_unpause(env: &Env, caller: &Address, action: &Symbol) -> Result<(), HotError>
 ```
 
-Evaluation order inside `do_pause` / `do_unpause`:
+### Asymmetric cooldown
 
-1. **State guard** — `AlreadyPaused` / `NotPaused` is checked first. This
-   ensures the semantic error is surfaced before the cooldown guard fires,
-   giving callers a precise signal about *why* the call was rejected.
+`do_pause` is **exempt from cooldown gating**. `do_unpause` **retains** its
+cooldown. This asymmetry is deliberate:
+
+- A circuit-breaker must be available **instantly**. If an attacker triggers an
+  `unpause` (or the admin toggles during an incident), a pending `"pause"`
+  cooldown window would keep the contract live — defeating the circuit-breaker's
+  entire purpose.
+- Re-opening the contract (`unpause`) is a high-impact, deliberate action that
+  benefits from rate-limiting to prevent oscillation attacks.
+- Signer rotation also retains its cooldown (unchanged).
+
+Evaluation order inside `do_pause`:
+
+1. **State guard** — `AlreadyPaused` is checked first.
+2. **State update** — the `Paused` flag is set in instance storage.
+3. **Event emission** — the `paused` topic is published.
+
+No cooldown timestamp is written for `pause`.
+
+Evaluation order inside `do_unpause`:
+
+1. **State guard** — `NotPaused` is checked first.
 2. **Cool-off guard** — `admin::guard` enforces the rate-limit window and
    records `last_run_ts = now`.
-3. **State update** — the `Paused` flag is flipped in instance storage.
-4. **Event emission** — a dedicated `paused` or `unpaused` topic is published.
-
-The `paused` / `unpaused` events carry the `caller` address as the topic and
-`()` as data (the state change itself is the signal).
+3. **State update** — the `Paused` flag is cleared.
+4. **Event emission** — the `unpaused` topic is published.
 
 ## Cool-off semantics
 
@@ -147,8 +163,10 @@ admin to safely shorten the cool-off in a genuine emergency.
 - The `AlreadyPaused` / `NotPaused` guards prevent silent no-ops: an operator
   trying to double-pause gets an explicit error rather than a successful
   transaction that changed nothing.
-- Distinct action tags are independently cooled so that an emergency `pause` is
-  never blocked by a recent `rotate`, and vice versa.
+- **Distinct action tags are independently cooled** so that an emergency `pause`
+  is never blocked by a recent `rotate`, and vice versa. `pause` carries no
+  cooldown tag at all, so it is always instantly available regardless of any
+  prior admin action.
 - All windows are bounded, so a configuration mistake cannot brick critical
   actions for longer than `MAX_COOLDOWN_SECS` (30 days).
 - `is_paused` is a pure read and does not require initialization; it returns

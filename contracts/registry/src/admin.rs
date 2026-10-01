@@ -1,38 +1,45 @@
 //! Admin cooldown enforcement for the Callora registry.
 //!
-//! Implements a cool-off window between critical admin actions to prevent
-//! rapid abuse. Every admin-gated entrypoint in
+//! Implements a per-developer cool-off window between registrations to prevent
+//! rapid abuse by the same developer while allowing different developers to
+//! register concurrently. Every admin-gated entrypoint in
 //! [`crate::CalloraRegistry`] must call [`require_cooldown`] before
 //! mutating state and [`update_cooldown`] after a successful mutation.
+//!
+//! # Storage
+//!
+//! The last-registration timestamp for each developer is stored in persistent
+//! storage under [`crate::StorageKey::DeveloperCooldown`]`(developer)`.
+//! There is exactly one authoritative key per developer; the former global
+//! `Symbol`-based key has been removed.
 
-use soroban_sdk::{Env, Symbol};
+use soroban_sdk::{Address, Env};
 
-use crate::RegistryError;
+use crate::{RegistryError, StorageKey};
 
-/// Cooldown window in seconds between admin actions.
+/// Cooldown window in seconds between registrations by the same developer.
 ///
-/// Set to 3 600 (1 hour): the admin must wait at least this long after one
-/// registration or other critical action before performing the next one.
+/// Set to 3 600 (1 hour): the same developer must wait at least this long
+/// after one registration before performing another one. Different developers
+/// are unaffected by each other's cooldown windows.
 pub const COOLDOWN_SECONDS: u64 = 3_600;
 
-/// Instance storage key for the last admin action timestamp.
-pub(crate) const LAST_ADMIN_ACTION_KEY: &str = "last_admin_action";
-
-/// Return the ledger timestamp of the last admin action, or `None` if no
-/// action has been performed yet (e.g. right after `init`).
-pub fn last_admin_action(env: &Env) -> Option<u64> {
+/// Return the ledger timestamp of the last registration by `developer`, or
+/// `None` if this developer has not yet registered anything.
+pub fn last_developer_action(env: &Env, developer: &Address) -> Option<u64> {
     env.storage()
-        .instance()
-        .get(&Symbol::new(env, LAST_ADMIN_ACTION_KEY))
+        .persistent()
+        .get(&StorageKey::DeveloperCooldown(developer.clone()))
 }
 
-/// Assert that the cooldown window has elapsed since the last admin action.
+/// Assert that the cooldown window has elapsed since `developer`'s last
+/// registration.
 ///
 /// Returns `Err(RegistryError::AdminCooldownActive)` if the cooldown has not
-/// expired. This is a no-op when no prior action has been recorded, so the
-/// first admin action always succeeds.
-pub fn require_cooldown(env: &Env) -> Result<(), RegistryError> {
-    if let Some(last) = last_admin_action(env) {
+/// expired for this developer. This is a no-op when the developer has no prior
+/// registration, so every developer's first action always succeeds.
+pub fn require_cooldown(env: &Env, developer: &Address) -> Result<(), RegistryError> {
+    if let Some(last) = last_developer_action(env, developer) {
         let now = env.ledger().timestamp();
         let elapsed = now.saturating_sub(last);
         if elapsed < COOLDOWN_SECONDS {
@@ -42,13 +49,14 @@ pub fn require_cooldown(env: &Env) -> Result<(), RegistryError> {
     Ok(())
 }
 
-/// Record the current ledger timestamp as the last admin action.
+/// Record the current ledger timestamp as `developer`'s last registration.
 ///
-/// Must be called after every successful admin-gated mutation so that
-/// subsequent actions are subject to the cooldown window.
-pub fn update_cooldown(env: &Env) {
+/// Must be called after every successful registration so that subsequent
+/// registrations by the same developer are subject to the cooldown window.
+/// Registrations by other developers are not affected.
+pub fn update_cooldown(env: &Env, developer: &Address) {
     let now = env.ledger().timestamp();
     env.storage()
-        .instance()
-        .set(&Symbol::new(env, LAST_ADMIN_ACTION_KEY), &now);
+        .persistent()
+        .set(&StorageKey::DeveloperCooldown(developer.clone()), &now);
 }

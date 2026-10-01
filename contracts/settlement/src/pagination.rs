@@ -1,10 +1,12 @@
 use crate::{
-    DeveloperBalance, StorageKey, INSTANCE_BUMP_AMOUNT, INSTANCE_BUMP_THRESHOLD,
-    MAX_DEVELOPER_BALANCES_PAGE_SIZE, PERSISTENT_BUMP_AMOUNT, PERSISTENT_BUMP_THRESHOLD,
+    CalloraSettlement, DeveloperBalance, StorageKey, INSTANCE_BUMP_AMOUNT,
+    INSTANCE_BUMP_THRESHOLD, MAX_DEVELOPER_BALANCES_PAGE_SIZE, PERSISTENT_BUMP_AMOUNT,
+    PERSISTENT_BUMP_THRESHOLD,
 };
 use soroban_sdk::{Address, Env, Vec};
 
-/// Get a paginated page of developer balances using cursor-based pagination.
+/// Get a paginated page of developer balances using cursor-based pagination
+/// over the **paged persistent index**.
 ///
 /// # Pagination Behavior
 /// Returns up to `limit` developer balance records starting **after** the supplied `cursor`
@@ -17,9 +19,10 @@ use soroban_sdk::{Address, Env, Vec};
 /// of the list has been reached, and `None` is returned as the next cursor.
 ///
 /// # Ordering Guarantees
-/// The index is maintained in deterministic sorted ascending order by address bytes, guaranteeing
-/// stable, deterministic pagination across repeated calls. The output is sorted, meaning pages
-/// are stable even if interleaved credits happen for developers that sort after the cursor.
+/// Within each index page addresses are stored in insertion order (append-only).
+/// Ordering across pages is therefore also insertion order, which is stable for
+/// sequential pagination. Interleaved credits for *new* developers appended after
+/// the cursor will appear on later pages; they never shift existing pages.
 ///
 /// # Page-size Configuration
 /// The page size is capped at `MAX_DEVELOPER_BALANCES_PAGE_SIZE` (100) to limit gas usage
@@ -34,7 +37,6 @@ use soroban_sdk::{Address, Env, Vec};
 /// entries to prevent archival.
 pub fn get_page(
     env: &Env,
-    index: &Vec<Address>,
     cursor: Option<Address>,
     limit: u32,
     usdc_token: &Address,
@@ -53,14 +55,18 @@ pub fn get_page(
     let mut past_cursor = cursor.is_none();
     let mut last_address: Option<Address> = None;
 
-    for address in index.iter() {
+    CalloraSettlement::iter_index(env, |address| {
+        if result.len() >= effective_limit {
+            return;
+        }
+
         if !past_cursor {
             if let Some(ref c) = cursor {
                 if &address == c {
                     past_cursor = true;
                 }
             }
-            continue;
+            return;
         }
 
         let key = StorageKey::DeveloperBalance(address.clone(), usdc_token.clone());
@@ -79,12 +85,8 @@ pub fn get_page(
             token: usdc_token.clone(),
             balance,
         });
-        last_address = Some(address.clone());
-
-        if result.len() >= effective_limit {
-            break;
-        }
-    }
+        last_address = Some(address);
+    });
 
     let next_cursor = if result.len() >= effective_limit {
         last_address

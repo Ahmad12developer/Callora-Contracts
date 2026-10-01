@@ -2,6 +2,8 @@
 
 use callora_fee::errors::ContractError;
 
+/// Asserts that every error discriminant is pinned to its declared u32 value.
+/// These values are part of the public ABI — never renumber them.
 #[test]
 fn test_fee_error_stability() {
     assert_eq!(ContractError::NotInitialized as u32, 1);

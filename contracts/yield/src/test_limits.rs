@@ -12,7 +12,7 @@ use crate::limits::{
 };
 use crate::YieldLimitError;
 use soroban_sdk::testutils::{Address as _, Events as _};
-use soroban_sdk::{Address, Env, IntoVal, Symbol, TryFromVal, Val};
+use soroban_sdk::{Address, BytesN, Env, IntoVal, Symbol, TryFromVal, Val};
 
 // ---------------------------------------------------------------------
 // helpers
@@ -576,6 +576,70 @@ fn new_admin_takes_over_authority() {
     );
     client.set_default_limits(&new_admin, &7u32, &8u32, &9u32);
     assert_eq!(client.get_default_limits().max_bets, 7);
+}
+
+// ---------------------------------------------------------------------
+// Upgrade version marker + storage-migration guard (Issue #1223)
+// ---------------------------------------------------------------------
+
+#[test]
+fn get_version_is_none_before_upgrade() {
+    let env = Env::default();
+    let (_, _, client) = setup_admin(&env);
+    assert_eq!(
+        client.get_version(),
+        None,
+        "no WASM hash must be recorded before the first upgrade"
+    );
+}
+
+#[test]
+fn upgrade_rejects_zero_wasm_hash() {
+    let env = Env::default();
+    let (_, admin, client) = setup_admin(&env);
+    let zero = BytesN::from_array(&env, &[0u8; 32]);
+
+    assert_eq!(
+        client.try_upgrade(&admin, &zero),
+        Err(Ok(YieldLimitError::UpgradeRejected)),
+        "all-zero upgrade hash must be rejected by the migration guard"
+    );
+    assert_eq!(
+        client.get_version(),
+        None,
+        "a rejected upgrade must not record a version marker"
+    );
+}
+
+#[test]
+fn upgrade_persists_wasm_hash_for_get_version() {
+    let env = Env::default();
+    let (_, admin, client) = setup_admin(&env);
+    // `upgrade` swaps the installed code, so the target hash must correspond
+    // to WASM uploaded to the test ledger (same pattern as the revenue pool
+    // and settlement upgrade tests).
+    let new_hash = env
+        .deployer()
+        .upload_contract_wasm(soroban_sdk::Bytes::new(&env));
+
+    client.upgrade(&admin, &new_hash);
+
+    assert_eq!(client.get_version(), Some(new_hash));
+}
+
+#[test]
+fn storage_layout_hash_is_real_and_deterministic() {
+    let env = Env::default();
+    let contract = env.register(CalloraYieldLimits, ());
+    let first = env.as_contract(&contract, || crate::limits::storage_layout_hash(&env));
+    let second = env.as_contract(&contract, || crate::limits::storage_layout_hash(&env));
+
+    assert_eq!(first, second, "layout hash must be deterministic");
+    assert_ne!(
+        first,
+        BytesN::from_array(&env, &[0u8; 32]),
+        "the guard must be invoked with a real layout hash, not the zero sentinel"
+    );
 }
 
 // ---------------------------------------------------------------------------

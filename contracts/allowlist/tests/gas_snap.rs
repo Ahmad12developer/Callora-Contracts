@@ -85,15 +85,7 @@ fn setup_allowlist_fixture() -> AllowlistFixture<'static> {
     let usdc_admin = token::StellarAssetClient::new(env, &usdc_addr);
     usdc_admin.mint(&vault_addr, &1_000);
 
-    client.init(
-        &owner,
-        &usdc_addr,
-        &Some(1_000),
-        &None,
-        &None,
-        &None,
-        &None,
-    );
+    client.init(&owner, &usdc_addr, &Some(1_000), &None, &None, &None, &None);
 
     AllowlistFixture {
         env: env.clone(),
@@ -104,7 +96,13 @@ fn setup_allowlist_fixture() -> AllowlistFixture<'static> {
 }
 
 /// Assert snapshot stays within `cpu_cap` and `mem_cap`, and emit JSON line for `gas-regression.sh`.
-fn assert_within_budget(contract: &str, entrypoint: &str, snap: ProfileSnapshot, cpu_cap: u64, mem_cap: u64) {
+fn assert_within_budget(
+    contract: &str,
+    entrypoint: &str,
+    snap: ProfileSnapshot,
+    cpu_cap: u64,
+    mem_cap: u64,
+) {
     println!(
         "{{\"contract\":\"{c}\",\"entrypoint\":\"{ep}\",\"cpu\":{cpu},\"mem\":{mem},\"budget_cpu\":{bcpu},\"budget_mem\":{bmem}}}",
         c = contract,
@@ -206,9 +204,16 @@ fn gas_snap_get_allowlist() {
 fn gas_snap_set_allowed_depositor() {
     let f = setup_allowlist_fixture();
     measure_snap!(f.env, snap, {
-        f.client.set_allowed_depositor(&f.owner, &Some(f.depositor.clone()));
+        f.client
+            .set_allowed_depositor(&f.owner, &Some(f.depositor.clone()));
     });
-    assert_within_budget("callora-allowlist", "set_allowed_depositor", snap, 170_000, 3_000);
+    assert_within_budget(
+        "callora-allowlist",
+        "set_allowed_depositor",
+        snap,
+        170_000,
+        3_000,
+    );
 }
 
 /// Snapshot `clear_allowed_depositors` — Legacy allowlist clear entrypoint.
@@ -216,11 +221,18 @@ fn gas_snap_set_allowed_depositor() {
 #[test]
 fn gas_snap_clear_allowed_depositors() {
     let f = setup_allowlist_fixture();
-    f.client.set_allowed_depositor(&f.owner, &Some(f.depositor.clone()));
+    f.client
+        .set_allowed_depositor(&f.owner, &Some(f.depositor.clone()));
     measure_snap!(f.env, snap, {
         f.client.clear_allowed_depositors(&f.owner);
     });
-    assert_within_budget("callora-allowlist", "clear_allowed_depositors", snap, 180_000, 3_000);
+    assert_within_budget(
+        "callora-allowlist",
+        "clear_allowed_depositors",
+        snap,
+        180_000,
+        3_000,
+    );
 }
 
 /// Snapshot `is_authorized_depositor` — View call to check depositor authorization.
@@ -232,7 +244,13 @@ fn gas_snap_is_authorized_depositor() {
     measure_snap!(f.env, snap, {
         let _ = f.client.is_authorized_depositor(&f.depositor);
     });
-    assert_within_budget("callora-allowlist", "is_authorized_depositor", snap, 90_000, 1_100);
+    assert_within_budget(
+        "callora-allowlist",
+        "is_authorized_depositor",
+        snap,
+        90_000,
+        1_100,
+    );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -270,7 +288,12 @@ fn gas_snap_clear_all_idempotent_relative() {
         f.client.clear_all(&f.owner);
     });
 
-    assert_no_regression("clear_all_idempotent_second_vs_first", snap_first, snap_second, 50);
+    assert_no_regression(
+        "clear_all_idempotent_second_vs_first",
+        snap_first,
+        snap_second,
+        50,
+    );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -6,11 +6,30 @@ pub const INSTANCE_BUMP_THRESHOLD: u32 = 17_280 * 30;
 /// Number of ledgers to extend instance storage TTL by (~60 days).
 pub const INSTANCE_BUMP_AMOUNT: u32 = 17_280 * 60;
 
-/// Minimum threshold of remaining ledgers before persistent storage TTL is extended.
-pub const PERSISTENT_BUMP_THRESHOLD: u32 = 50_000;
+/// Ledgers per day at the ~5 s target close time.
+pub const LEDGERS_PER_DAY: u32 = 17_280;
 
-/// Number of ledgers to extend persistent storage TTL by.
-pub const PERSISTENT_BUMP_AMOUNT: u32 = 50_000;
+/// Remaining-TTL threshold (~30 days) below which a persistent entry is
+/// re-extended on access/write (#1131).
+///
+/// Kept strictly below [`PERSISTENT_BUMP_AMOUNT`]: with the previous
+/// `threshold == amount == 50_000`, every single write paid for a TTL
+/// extension. Now an entry is only re-extended once it has aged past
+/// ~90 days of its ~120-day lifetime.
+pub const PERSISTENT_BUMP_THRESHOLD: u32 = LEDGERS_PER_DAY * 30;
+
+/// Persistent-entry lifetime (~120 days) applied on every extension (#1131).
+///
+/// The old value, `50_000` ledgers, was ~2.9 days, not the "1 year" the
+/// code comments claimed — developer balances, caps, claim windows and
+/// replay high-water marks could archive after a long weekend of
+/// inactivity. One year (~6.3M ledgers) is above the network's
+/// `max_entry_ttl` (~180 days on pubnet), so extending that far would be
+/// rejected; ~120 days stays safely under that cap while outliving any
+/// realistic idle period. Every settlement persistent key family —
+/// balances, HWM, caps, claim windows, minimum balances, pending
+/// migrations, price-registry write ledgers — uses this pair.
+pub const PERSISTENT_BUMP_AMOUNT: u32 = LEDGERS_PER_DAY * 120;
 
 /// Persistent storage keys for settlement contract.
 ///
@@ -27,7 +46,23 @@ pub enum StorageKey {
     Vault,
     PendingAdmin,
     PendingVault,
+    /// Legacy flat developer index in instance storage — kept so the
+    /// index-to-pages migration can read and drain it.  Do **not** write
+    /// new entries here; new registrations go via [`StorageKey::IndexPage`].
     DeveloperIndex,
+    /// Persistent per-developer membership flag (`bool`).
+    ///
+    /// Set to `true` the first time a developer is credited.  Used as an O(1)
+    /// duplicate guard so `sorted_insert` no longer scans the whole index.
+    DeveloperMember(Address),
+    /// One page of the developer index stored in **persistent** storage.
+    ///
+    /// Key: zero-based page number.  Each page holds up to
+    /// [`INDEX_PAGE_SIZE`] addresses in ascending order by address bytes.
+    IndexPage(u32),
+    /// Total number of allocated index pages (stored in instance storage as
+    /// a single `u32`).  Replaces the unbounded `DeveloperIndex` vector.
+    IndexPageCount,
     /// Legacy single-token balance — kept for V1 → V2 migration reads only.
     /// Do **not** use for new writes; new per-token credits go to
     /// [`StorageKey::DeveloperBalance`].
@@ -58,6 +93,22 @@ pub enum StorageKey {
     PriceRegistryLastWrite(Address),
     /// Price entry for a given offering identifier.
     Price(soroban_sdk::String),
+    /// Pending timelocked WASM upgrade proposal.
+    PendingUpgrade,
+    /// Whether a token contract is accepted for settlement payments.
+    SupportedToken(Address),
+    /// Whether the configured-USDC allowlist backfill has run.
+    SupportedTokensMigrated,
+    /// Persistent replay marker for an accounting-only vault deduction.
+    DeductionRequest(u64),
+}
+
+/// Accounting-only deduction recorded; does not imply a token transfer.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct DeductionRecordedEvent {
+    pub amount: i128,
+    pub request_id: u64,
 }
 
 /// Read-only preview of a developer claim/withdrawal.
@@ -97,8 +148,15 @@ pub struct AdminBroadcast {
     pub message: soroban_sdk::String,
 }
 
-/// Storage TTL entry for a given storage key category, returned by
-/// `get_storage_ttl` for the off-chain `storage-ttl-doctor` operator tool.
+/// Storage TTL policy entry for a given storage key category.
+///
+/// Retained for ABI compatibility with the off-chain tooling that consumes the
+/// settlement contract's TTL views. Note that the `ttl` field is **not** a live
+/// measurement: contract code cannot observe the remaining TTL of a ledger
+/// entry. Read live TTLs over Soroban RPC `getLedgerEntries` and compare
+/// `liveUntilLedgerSeq` against the current ledger sequence — see
+/// `docs/STORAGE_TTL_DOCTOR.md`. The revenue pool exposes policy constants only
+/// via `get_ttl_policy` (`callora_revenue_pool::TtlPolicy`).
 #[contracttype]
 #[derive(Clone, Debug, PartialEq)]
 pub struct StorageEntryTtl {
@@ -253,4 +311,21 @@ pub struct AdminMigrationEvent {
     pub to: Address,
     pub amount: i128,
     pub executed_at: u64,
+}
+
+/// Emitted when the admin proposes a timelocked WASM upgrade.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct UpgradeProposedEvent {
+    pub wasm_hash: soroban_sdk::BytesN<32>,
+    pub proposed_at: u64,
+    pub execute_after: u64,
+}
+
+/// Emitted when a pending WASM upgrade is cancelled by the admin.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct UpgradeCancelledEvent {
+    pub wasm_hash: soroban_sdk::BytesN<32>,
+    pub cancelled_at: u64,
 }

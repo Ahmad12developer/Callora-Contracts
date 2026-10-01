@@ -419,7 +419,7 @@ mod vault {
         let env = Env::default();
         env.mock_all_auths();
         let ctx = setup(&env);
-        let ids: Vec<Symbol> = Vec::new(&ctx.env);
+        let ids: Vec<u64> = Vec::new(&ctx.env);
         assert!(ctx
             .vault
             .try_prune_processed_requests(&ctx.owner, &ids)
@@ -431,7 +431,7 @@ mod vault {
         let env = Env::default();
         env.mock_all_auths();
         let ctx = setup(&env);
-        let ids: Vec<Symbol> = Vec::new(&ctx.env);
+        let ids: Vec<u64> = Vec::new(&ctx.env);
         ctx.env.set_auths(&[]);
         assert!(ctx
             .vault
@@ -826,7 +826,7 @@ mod settlement {
     }
 
     // -----------------------------------------------------------------------
-    // accept_vault — pending vault or admin
+    // accept_vault — pending vault only (#1141: admin cannot self-accept)
     // -----------------------------------------------------------------------
 
     #[test]
@@ -840,13 +840,13 @@ mod settlement {
     }
 
     #[test]
-    fn accept_vault_admin_succeeds() {
+    fn accept_vault_admin_rejected() {
         let env = Env::default();
         env.mock_all_auths();
         let ctx = setup(&env);
         let new_vault = Address::generate(&ctx.env);
         ctx.settlement.propose_vault(&ctx.admin, &new_vault);
-        assert!(ctx.settlement.try_accept_vault(&ctx.admin).is_ok());
+        assert!(ctx.settlement.try_accept_vault(&ctx.admin).is_err());
     }
 
     #[test]
@@ -1740,7 +1740,9 @@ mod revenue_pool_audit {
         let ctx = setup(&env);
         ctx.env.set_auths(&[]);
         assert!(
-            ctx.pool.try_set_admin(&ctx.admin, &ctx.pending_admin).is_err(),
+            ctx.pool
+                .try_set_admin(&ctx.admin, &ctx.pending_admin)
+                .is_err(),
             "set_admin must require auth: no-auth call must fail"
         );
     }
@@ -1752,7 +1754,9 @@ mod revenue_pool_audit {
         let ctx = setup(&env);
         // outsider has auth but is not the current admin
         assert!(
-            ctx.pool.try_set_admin(&ctx.outsider, &ctx.pending_admin).is_err(),
+            ctx.pool
+                .try_set_admin(&ctx.outsider, &ctx.pending_admin)
+                .is_err(),
             "set_admin must reject non-admin caller even with auth"
         );
     }
@@ -1763,7 +1767,9 @@ mod revenue_pool_audit {
         env.mock_all_auths();
         let ctx = setup(&env);
         assert!(
-            ctx.pool.try_set_admin(&ctx.admin, &ctx.pending_admin).is_ok(),
+            ctx.pool
+                .try_set_admin(&ctx.admin, &ctx.pending_admin)
+                .is_ok(),
             "set_admin must succeed for admin with auth"
         );
         assert_eq!(ctx.pool.get_pending_admin(), Some(ctx.pending_admin));
@@ -1908,7 +1914,9 @@ mod revenue_pool_audit {
         let guardian = Address::generate(&ctx.env);
         ctx.env.set_auths(&[]);
         assert!(
-            ctx.pool.try_set_pause_guardian(&ctx.admin, &guardian).is_err(),
+            ctx.pool
+                .try_set_pause_guardian(&ctx.admin, &guardian)
+                .is_err(),
             "set_pause_guardian must require auth: no-auth call must fail"
         );
     }
@@ -1920,7 +1928,9 @@ mod revenue_pool_audit {
         let ctx = setup(&env);
         let guardian = Address::generate(&ctx.env);
         assert!(
-            ctx.pool.try_set_pause_guardian(&ctx.outsider, &guardian).is_err(),
+            ctx.pool
+                .try_set_pause_guardian(&ctx.outsider, &guardian)
+                .is_err(),
             "set_pause_guardian must reject non-admin caller even with auth"
         );
     }
@@ -1932,7 +1942,9 @@ mod revenue_pool_audit {
         let ctx = setup(&env);
         let guardian = Address::generate(&ctx.env);
         assert!(
-            ctx.pool.try_set_pause_guardian(&ctx.admin, &guardian).is_ok(),
+            ctx.pool
+                .try_set_pause_guardian(&ctx.admin, &guardian)
+                .is_ok(),
             "set_pause_guardian must succeed for admin with auth"
         );
         assert_eq!(ctx.pool.get_pause_guardian(), Some(guardian));
@@ -2105,7 +2117,9 @@ mod revenue_pool_audit {
         let ctx = setup(&env);
         ctx.env.set_auths(&[]);
         assert!(
-            ctx.pool.try_receive_payment(&ctx.admin, &500, &true).is_err(),
+            ctx.pool
+                .try_receive_payment(&ctx.admin, &500, &true)
+                .is_err(),
             "receive_payment must require auth: no-auth call must fail"
         );
     }
@@ -2116,7 +2130,9 @@ mod revenue_pool_audit {
         env.mock_all_auths();
         let ctx = setup(&env);
         assert!(
-            ctx.pool.try_receive_payment(&ctx.outsider, &500, &true).is_err(),
+            ctx.pool
+                .try_receive_payment(&ctx.outsider, &500, &true)
+                .is_err(),
             "receive_payment must reject non-admin caller even with auth"
         );
     }
@@ -2127,7 +2143,9 @@ mod revenue_pool_audit {
         env.mock_all_auths();
         let ctx = setup(&env);
         assert!(
-            ctx.pool.try_receive_payment(&ctx.admin, &500, &true).is_ok(),
+            ctx.pool
+                .try_receive_payment(&ctx.admin, &500, &true)
+                .is_ok(),
             "receive_payment must succeed for admin with auth"
         );
     }
@@ -2145,7 +2163,9 @@ mod revenue_pool_audit {
         let source = Symbol::new(&ctx.env, "fees");
         ctx.env.set_auths(&[]);
         assert!(
-            ctx.pool.try_deposit_yield(&ctx.admin, &400, &source).is_err(),
+            ctx.pool
+                .try_deposit_yield(&ctx.admin, &400, &source)
+                .is_err(),
             "deposit_yield must require auth on treasury: no-auth call must fail"
         );
     }
@@ -2159,7 +2179,9 @@ mod revenue_pool_audit {
         let source = Symbol::new(&ctx.env, "fees");
         // outsider has auth but is not the current admin (treasury check)
         assert!(
-            ctx.pool.try_deposit_yield(&ctx.outsider, &400, &source).is_err(),
+            ctx.pool
+                .try_deposit_yield(&ctx.outsider, &400, &source)
+                .is_err(),
             "deposit_yield must reject non-admin treasury caller even with auth"
         );
     }
@@ -2172,7 +2194,9 @@ mod revenue_pool_audit {
         ctx.usdc_admin.mint(&ctx.admin, &1_000);
         let source = Symbol::new(&ctx.env, "fees");
         assert!(
-            ctx.pool.try_deposit_yield(&ctx.admin, &400, &source).is_ok(),
+            ctx.pool
+                .try_deposit_yield(&ctx.admin, &400, &source)
+                .is_ok(),
             "deposit_yield must succeed for admin (treasury) with auth"
         );
         assert_eq!(ctx.pool.get_cumulative_yield_deposited(), 400);
@@ -2200,7 +2224,9 @@ mod revenue_pool_audit {
         env.mock_all_auths();
         let ctx = setup(&env);
         assert!(
-            ctx.pool.try_set_max_distribute(&ctx.outsider, &5_000).is_err(),
+            ctx.pool
+                .try_set_max_distribute(&ctx.outsider, &5_000)
+                .is_err(),
             "set_max_distribute must reject non-admin caller even with auth"
         );
     }
@@ -2228,7 +2254,9 @@ mod revenue_pool_audit {
         let ctx = setup(&env);
         ctx.env.set_auths(&[]);
         assert!(
-            ctx.pool.try_distribute(&ctx.admin, &ctx.developer, &100).is_err(),
+            ctx.pool
+                .try_distribute(&ctx.admin, &ctx.developer, &100)
+                .is_err(),
             "distribute must require auth: no-auth call must fail"
         );
     }
@@ -2239,7 +2267,9 @@ mod revenue_pool_audit {
         env.mock_all_auths();
         let ctx = setup(&env);
         assert!(
-            ctx.pool.try_distribute(&ctx.outsider, &ctx.developer, &100).is_err(),
+            ctx.pool
+                .try_distribute(&ctx.outsider, &ctx.developer, &100)
+                .is_err(),
             "distribute must reject non-admin caller even with auth"
         );
     }
@@ -2251,7 +2281,9 @@ mod revenue_pool_audit {
         let ctx = setup(&env);
         let balance_before = ctx.pool.balance();
         assert!(
-            ctx.pool.try_distribute(&ctx.admin, &ctx.developer, &100).is_ok(),
+            ctx.pool
+                .try_distribute(&ctx.admin, &ctx.developer, &100)
+                .is_ok(),
             "distribute must succeed for admin with auth"
         );
         assert_eq!(ctx.pool.balance(), balance_before - 100);
@@ -2269,7 +2301,9 @@ mod revenue_pool_audit {
         let payments = Vec::from_array(&ctx.env, [(ctx.developer.clone(), 100i128)]);
         ctx.env.set_auths(&[]);
         assert!(
-            ctx.pool.try_batch_distribute(&ctx.admin, &payments).is_err(),
+            ctx.pool
+                .try_batch_distribute(&ctx.admin, &payments)
+                .is_err(),
             "batch_distribute must require auth: no-auth call must fail"
         );
     }
@@ -2281,7 +2315,9 @@ mod revenue_pool_audit {
         let ctx = setup(&env);
         let payments = Vec::from_array(&ctx.env, [(ctx.developer.clone(), 100i128)]);
         assert!(
-            ctx.pool.try_batch_distribute(&ctx.outsider, &payments).is_err(),
+            ctx.pool
+                .try_batch_distribute(&ctx.outsider, &payments)
+                .is_err(),
             "batch_distribute must reject non-admin caller even with auth"
         );
     }
@@ -2359,7 +2395,9 @@ mod revenue_pool_audit {
         let severity = callora_revenue_pool::Severity::Warn;
         let msg = soroban_sdk::String::from_str(&ctx.env, "audit test");
         assert!(
-            ctx.pool.try_broadcast(&ctx.outsider, &severity, &msg).is_err(),
+            ctx.pool
+                .try_broadcast(&ctx.outsider, &severity, &msg)
+                .is_err(),
             "broadcast must reject non-admin caller even with auth"
         );
     }
@@ -2389,7 +2427,9 @@ mod revenue_pool_audit {
         let treasury = Address::generate(&ctx.env);
         ctx.env.set_auths(&[]);
         assert!(
-            ctx.pool.try_propose_emergency_drain(&ctx.admin, &treasury, &500).is_err(),
+            ctx.pool
+                .try_propose_emergency_drain(&ctx.admin, &treasury, &500)
+                .is_err(),
             "propose_emergency_drain must require auth: no-auth call must fail"
         );
     }
@@ -2401,7 +2441,9 @@ mod revenue_pool_audit {
         let ctx = setup(&env);
         let treasury = Address::generate(&ctx.env);
         assert!(
-            ctx.pool.try_propose_emergency_drain(&ctx.outsider, &treasury, &500).is_err(),
+            ctx.pool
+                .try_propose_emergency_drain(&ctx.outsider, &treasury, &500)
+                .is_err(),
             "propose_emergency_drain must reject non-admin caller even with auth"
         );
     }
@@ -2413,7 +2455,9 @@ mod revenue_pool_audit {
         let ctx = setup(&env);
         let treasury = Address::generate(&ctx.env);
         assert!(
-            ctx.pool.try_propose_emergency_drain(&ctx.admin, &treasury, &500).is_ok(),
+            ctx.pool
+                .try_propose_emergency_drain(&ctx.admin, &treasury, &500)
+                .is_ok(),
             "propose_emergency_drain must succeed for admin with auth"
         );
         let pending = ctx.pool.get_pending_emergency_drain();
@@ -2431,7 +2475,8 @@ mod revenue_pool_audit {
         env.mock_all_auths();
         let ctx = setup(&env);
         let treasury = Address::generate(&ctx.env);
-        ctx.pool.propose_emergency_drain(&ctx.admin, &treasury, &500);
+        ctx.pool
+            .propose_emergency_drain(&ctx.admin, &treasury, &500);
         ctx.env.set_auths(&[]);
         assert!(
             ctx.pool.try_cancel_emergency_drain(&ctx.admin).is_err(),
@@ -2445,7 +2490,8 @@ mod revenue_pool_audit {
         env.mock_all_auths();
         let ctx = setup(&env);
         let treasury = Address::generate(&ctx.env);
-        ctx.pool.propose_emergency_drain(&ctx.admin, &treasury, &500);
+        ctx.pool
+            .propose_emergency_drain(&ctx.admin, &treasury, &500);
         assert!(
             ctx.pool.try_cancel_emergency_drain(&ctx.outsider).is_err(),
             "cancel_emergency_drain must reject non-admin caller even with auth"
@@ -2458,7 +2504,8 @@ mod revenue_pool_audit {
         env.mock_all_auths();
         let ctx = setup(&env);
         let treasury = Address::generate(&ctx.env);
-        ctx.pool.propose_emergency_drain(&ctx.admin, &treasury, &500);
+        ctx.pool
+            .propose_emergency_drain(&ctx.admin, &treasury, &500);
         assert!(
             ctx.pool.try_cancel_emergency_drain(&ctx.admin).is_ok(),
             "cancel_emergency_drain must succeed for admin with auth"
@@ -2476,7 +2523,8 @@ mod revenue_pool_audit {
         env.mock_all_auths();
         let ctx = setup(&env);
         let treasury = Address::generate(&ctx.env);
-        ctx.pool.propose_emergency_drain(&ctx.admin, &treasury, &500);
+        ctx.pool
+            .propose_emergency_drain(&ctx.admin, &treasury, &500);
         ctx.env.ledger().with_mut(|l| l.timestamp += 86_401);
         ctx.env.set_auths(&[]);
         assert!(
@@ -2491,7 +2539,8 @@ mod revenue_pool_audit {
         env.mock_all_auths();
         let ctx = setup(&env);
         let treasury = Address::generate(&ctx.env);
-        ctx.pool.propose_emergency_drain(&ctx.admin, &treasury, &500);
+        ctx.pool
+            .propose_emergency_drain(&ctx.admin, &treasury, &500);
         ctx.env.ledger().with_mut(|l| l.timestamp += 86_401);
         assert!(
             ctx.pool.try_execute_emergency_drain(&ctx.outsider).is_err(),
@@ -2505,7 +2554,8 @@ mod revenue_pool_audit {
         env.mock_all_auths();
         let ctx = setup(&env);
         let treasury = Address::generate(&ctx.env);
-        ctx.pool.propose_emergency_drain(&ctx.admin, &treasury, &500);
+        ctx.pool
+            .propose_emergency_drain(&ctx.admin, &treasury, &500);
         ctx.env.ledger().with_mut(|l| l.timestamp += 86_401);
         assert!(
             ctx.pool.try_execute_emergency_drain(&ctx.admin).is_ok(),

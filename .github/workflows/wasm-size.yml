@@ -11,23 +11,19 @@ jobs:
   wasm-size:
     name: Contract WASM size check
     runs-on: ubuntu-latest
-    continue-on-error: true
     env:
       WASM_SIZE_LIMIT_BYTES: "102400"
 
     steps:
       - name: Checkout repository
-        continue-on-error: true
         uses: actions/checkout@v4
 
       - name: Install Rust
-        continue-on-error: true
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
 
       - name: Cache cargo
-        continue-on-error: true
         uses: actions/cache@v4
         with:
           path: |
@@ -40,7 +36,6 @@ jobs:
             ${{ runner.os }}-cargo-
 
       - name: Check per-contract WASM size
-        continue-on-error: true
         shell: bash
         run: |
           chmod +x scripts/check-wasm-size.sh

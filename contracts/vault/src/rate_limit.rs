@@ -49,7 +49,7 @@ fn refill_state(env: &Env, developer: &Address) -> Option<(RateLimitConfig, Rate
     let config = get_config(env, developer)?;
     let current_ledger = env.ledger().sequence();
 
-    let mut state = get_state(env, developer).unwrap_or_else(|| RateLimitState {
+    let mut state = get_state(env, developer).unwrap_or(RateLimitState {
         tokens: config.capacity,
         last_updated_ledger: current_ledger,
     });

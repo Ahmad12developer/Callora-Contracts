@@ -1,8 +1,8 @@
-﻿# Security
+# Security
 
 This document outlines security best practices and checklist items for Callora vault contracts to improve audit readiness and reviewer confidence.
 
-## ðŸ” Vault Security Checklist
+## 🔐 Vault Security Checklist
 
 ### Access Control
 
@@ -13,7 +13,6 @@ This document outlines security best practices and checklist items for Callora v
 ### Arithmetic Safety
 
 - [x] No integer overflow/underflow possible
-- [ ] Solidity ^0.8.x overflow checks relied upon or SafeMath used where required
 - [x] For Soroban/Rust: `checked_add` / `checked_sub` used for all balance mutations
 - [x] `overflow-checks` enabled in both dev and release profiles
 
@@ -25,8 +24,9 @@ Additional hardening note:
 ### Initialization / Re-initialization
 
 - [x] `initialize` function protected against multiple calls (e.g., checking if admin key exists in `instance()` storage)
-- [ ] Contract upgrades (`env.deployer().update_current_contract_wasm()`) protected by `require_auth()`
-- [ ] No unprotected re-init functions
+- [ ] Contract upgrades (`env.deployer().update_current_contract_wasm()`) protected by `require_auth()` — tracked in [#264](https://github.com/CalloraOrg/Callora-Contracts/issues/264)
+- [ ] No unprotected re-init functions — `distribute::init` in `callora-revenue-pool` is currently callable without authentication; tracked in [#265](https://github.com/CalloraOrg/Callora-Contracts/issues/265)
+- [ ] Unrestricted upgrade cooldown setter reviewed — `set_upgrade_cooldown` currently has no auth gate; tracked in [#266](https://github.com/CalloraOrg/Callora-Contracts/issues/266)
 - [x] `initialize` validates all input parameters
 
 ### Pause / Circuit Breaker
@@ -41,8 +41,8 @@ Additional hardening note:
 ### Admin Transfer
 
 - [x] Ownership transfer is two-step (optional but recommended)
-- [ ] Ownership transfer emits events
-- [ ] Renounce ownership reviewed and justified
+- [ ] Ownership transfer emits events — tracked in [#267](https://github.com/CalloraOrg/Callora-Contracts/issues/267)
+- [ ] Renounce ownership reviewed and justified — tracked in [#268](https://github.com/CalloraOrg/Callora-Contracts/issues/268)
 
 ### Authorized Caller Role Management
 
@@ -64,14 +64,14 @@ controls are in place:
   configured `authorized_caller` (panic: `unauthorized: caller is not the authorized caller`)
 - [x] When `authorized_caller` is `None`, deduct-class operations fall back to
   owner-only execution; non-owner callers remain rejected
-- [ ] Rotation flow (set â†’ use â†’ rotate â†’ old caller rejected) covered by
-  unit tests in `contracts/vault/src/test.rs`
+- [ ] Rotation flow (set → use → rotate → old caller rejected) covered by
+  unit tests in `contracts/vault/src/test.rs` — tracked in [#269](https://github.com/CalloraOrg/Callora-Contracts/issues/269)
 - [ ] Role changes are reviewed as part of the operational runbook; the new
   caller address is verified off-chain (e.g. multisig or governance) before
-  the owner signs `set_authorized_caller`
+  the owner signs `set_authorized_caller` — tracked in [#270](https://github.com/CalloraOrg/Callora-Contracts/issues/270)
 - [ ] `authorized_caller` is scoped strictly to deduct-class operations and
   does **not** grant the ability to withdraw, distribute, pause, or upgrade
-  the contract
+  the contract — tracked in [#271](https://github.com/CalloraOrg/Callora-Contracts/issues/271)
 
 > **Security note:** `authorized_caller` is intentionally a narrow-privilege
 > role meant for the off-chain billing/settlement driver. It can spend vault
@@ -94,10 +94,10 @@ controls are in place:
 
 ### External Calls
 
-- [ ] Token transfers strictly rely on `soroban_sdk::token::Client`
-- [ ] Cross-contract calls handle potential errors/panics gracefully
-- [ ] State changes are persisted before making cross-contract calls to mitigate subtle state-caching issues
-- [ ] Checks-effects-interactions pattern followed
+- [ ] Token transfers strictly rely on `soroban_sdk::token::Client` — tracked in [#272](https://github.com/CalloraOrg/Callora-Contracts/issues/272)
+- [ ] Cross-contract calls handle potential errors/panics gracefully — tracked in [#273](https://github.com/CalloraOrg/Callora-Contracts/issues/273)
+- [ ] State changes are persisted before making cross-contract calls to mitigate subtle state-caching issues — tracked in [#274](https://github.com/CalloraOrg/Callora-Contracts/issues/274)
+- [ ] Checks-effects-interactions pattern followed — tracked in [#275](https://github.com/CalloraOrg/Callora-Contracts/issues/275)
 
 ### Revenue Routing External Transfers (Issue #110)
 
@@ -107,7 +107,7 @@ The vault performs USDC transfers to configurable counterpart addresses on every
 - **settlement address**: set and updated exclusively by the on-chain admin via
   `set_settlement`. This function emits a `set_settlement` event to provide a
   clear audit trail for address rotation. Transfers to this address implement
-  the documented `Vault â†’ Settlement` revenue flow described in
+  the documented `Vault → Settlement` revenue flow described in
   `SETTLEMENT_IMPLEMENTATION.md`.
 - **revenue_pool address**: retained as an informational configuration slot via
   `set_revenue_pool` / `get_revenue_pool`. It is **no longer consulted during
@@ -124,21 +124,21 @@ The vault performs USDC transfers to configurable counterpart addresses on every
 - **Atomic Updates**: Each address is updated atomically in a single storage write,
   ensuring no partial update is observable by other callers.
 - **Audit Trail**: All routing configuration changes emit events:
-  - `set_settlement(admin) â†’ address` when setting settlement
-  - `set_revenue_pool(admin) â†’ address` when setting revenue pool
-  - `clear_revenue_pool(admin) â†’ ()` when clearing revenue pool
+  - `set_settlement(admin) → address` when setting settlement
+  - `set_revenue_pool(admin) → address` when setting revenue pool
+  - `clear_revenue_pool(admin) → ()` when clearing revenue pool
 
 ### Vault-Specific Risks
 
-- [ ] Deposit/withdraw invariants tested
-- [ ] Vault balance accounting verified
-- [ ] Funds cannot be locked permanently
-- [ ] Minimum deposit requirements enforced
+- [ ] Deposit/withdraw invariants tested — tracked in [#276](https://github.com/CalloraOrg/Callora-Contracts/issues/276)
+- [ ] Vault balance accounting verified — tracked in [#277](https://github.com/CalloraOrg/Callora-Contracts/issues/277)
+- [ ] Funds cannot be locked permanently — tracked in [#278](https://github.com/CalloraOrg/Callora-Contracts/issues/278)
+- [ ] Minimum deposit requirements enforced — tracked in [#279](https://github.com/CalloraOrg/Callora-Contracts/issues/279)
 - [x] Maximum deduction limits enforced (`get_max_deduct` / `set_max_deduct`) with explicit positive-value validation and dedicated unit tests.
 - [x] Revenue pool transfers validated
 - [x] Settlement developer address required when routing to specific developer.
 - [x] Settlement developer address must be None when routing to global pool.
-- [ ] Batch operations respect individual limits
+- [ ] Batch operations respect individual limits — tracked in [#280](https://github.com/CalloraOrg/Callora-Contracts/issues/280)
 
 ### Revenue Pool Security Assumptions
 
@@ -167,26 +167,26 @@ The Revenue Pool contract (`contracts/revenue_pool`) operates under the followin
 
 ### Input Validation
 
-- [ ] All amounts validated to be > 0
-- [ ] Address/parameter validation on all public functions
-- [ ] Boundary conditions tested (max values, zero values)
-- [ ] Error messages provide clear context for debugging
+- [ ] All amounts validated to be > 0 — tracked in [#281](https://github.com/CalloraOrg/Callora-Contracts/issues/281)
+- [ ] Address/parameter validation on all public functions — tracked in [#282](https://github.com/CalloraOrg/Callora-Contracts/issues/282)
+- [ ] Boundary conditions tested (max values, zero values) — tracked in [#283](https://github.com/CalloraOrg/Callora-Contracts/issues/283)
+- [ ] Error messages provide clear context for debugging — tracked in [#284](https://github.com/CalloraOrg/Callora-Contracts/issues/284)
 - `callora-vault::init` enforces `min_deposit > 0`; omitted values default to `1`.
 
 ### Event Logging
 
-- [ ] All state changes emit appropriate events
-- [ ] Event schema documented and indexed
-- [ ] Critical operations (deposit, withdraw, deduct) logged with full context
+- [ ] All state changes emit appropriate events — tracked in [#285](https://github.com/CalloraOrg/Callora-Contracts/issues/285)
+- [ ] Event schema documented and indexed — tracked in [#286](https://github.com/CalloraOrg/Callora-Contracts/issues/286)
+- [ ] Critical operations (deposit, withdraw, deduct) logged with full context — tracked in [#287](https://github.com/CalloraOrg/Callora-Contracts/issues/287)
 - [x] Unit tests assert `deposit` and `deduct` event topics/data (caller, request_id semantics, and resulting balance).
-- [x] `callora-revenue-pool::set_admin` emits an explicit `admin_changed` event carrying `(old_admin, new_admin)` before `admin_transfer_started`, and unit tests pin topics/data.
+- [x] `callora-revenue-pool` emits `admin_changed` carrying `(old_admin, new_admin)` only from `accept_admin()` / `claim_admin()`. Nomination (`set_admin`) emits `admin_transfer_started` alone and cancellation emits `admin_cancelled` alone, so no `admin_changed` event exists unless the transfer completed; unit tests pin topics/data for all three cases.
 
 ### Testing Coverage
 
 - [x] Unit tests cover all public functions
 - [x] Edge cases and boundary conditions tested
 - [x] Panic scenarios tested with `#[should_panic]`
-- [ ] Integration tests for complete user flows
+- [ ] Integration tests for complete user flows — tracked in [#288](https://github.com/CalloraOrg/Callora-Contracts/issues/288)
 - [x] Minimum 95% test coverage maintained (enforced via `cargo tarpaulin` with `fail-under = 95.0`)
 
 ## External Audit Recommendation
@@ -216,25 +216,25 @@ Before any mainnet deployment:
 
 ### Soroban-Specific Security
 
-- [ ] WASM compilation verified and reproducible (`stellar contract build` / `cargo build --target wasm32-unknown-unknown --release`)
-- [ ] Storage lifespan (`extend_ttl`) implemented to prevent state archiving for critical data
-- [ ] Stellar network parameters validated (budget, CPU/RAM limits)
-- [ ] Cross-contract call security and generic type usage (`Val`) reviewed
-- [ ] Storage patterns optimized and secure (e.g., correct usage of `persistent` vs `instance` vs `temporary` keys)
+- [ ] WASM compilation verified and reproducible (`stellar contract build` / `cargo build --target wasm32-unknown-unknown --release`) — tracked in [#289](https://github.com/CalloraOrg/Callora-Contracts/issues/289)
+- [ ] Storage lifespan (`extend_ttl`) implemented to prevent state archiving for critical data — tracked in [#290](https://github.com/CalloraOrg/Callora-Contracts/issues/290)
+- [ ] Stellar network parameters validated (budget, CPU/RAM limits) — tracked in [#291](https://github.com/CalloraOrg/Callora-Contracts/issues/291)
+- [ ] Cross-contract call security and generic type usage (`Val`) reviewed — tracked in [#292](https://github.com/CalloraOrg/Callora-Contracts/issues/292)
+- [ ] Storage patterns optimized and secure (e.g., correct usage of `persistent` vs `instance` vs `temporary` keys) — tracked in [#293](https://github.com/CalloraOrg/Callora-Contracts/issues/293)
 
 ### Economic Security
 
-- [ ] Fee structures reviewed for economic attacks
-- [ ] Revenue pool distribution validated
-- [ ] Maximum loss scenarios analyzed
-- [ ] Slippage and market impact considered
+- [ ] Fee structures reviewed for economic attacks — tracked in [#294](https://github.com/CalloraOrg/Callora-Contracts/issues/294)
+- [ ] Revenue pool distribution validated — tracked in [#295](https://github.com/CalloraOrg/Callora-Contracts/issues/295)
+- [ ] Maximum loss scenarios analyzed — tracked in [#296](https://github.com/CalloraOrg/Callora-Contracts/issues/296)
+- [ ] Slippage and market impact considered — tracked in [#297](https://github.com/CalloraOrg/Callora-Contracts/issues/297)
 
 ### Operational Security
 
-- [ ] Deployment process documented and automated
-- [ ] Key management procedures established
-- [ ] Monitoring and alerting configured
-- [ ] Incident response plan prepared
+- [ ] Deployment process documented and automated — tracked in [#298](https://github.com/CalloraOrg/Callora-Contracts/issues/298)
+- [ ] Key management procedures established — tracked in [#299](https://github.com/CalloraOrg/Callora-Contracts/issues/299)
+- [ ] Monitoring and alerting configured — tracked in [#300](https://github.com/CalloraOrg/Callora-Contracts/issues/300)
+- [ ] Incident response plan prepared — tracked in [#301](https://github.com/CalloraOrg/Callora-Contracts/issues/301)
 
 ## Security Resources
 
@@ -246,13 +246,33 @@ Before any mainnet deployment:
 
 **Note**: This checklist should be reviewed and updated regularly as new security patterns emerge and the codebase evolves.
 
+## Vulnerability Disclosure
+
+We take the security of Callora contracts seriously. If you believe you have
+found a vulnerability, please report it responsibly.
+
+- **Contact:** security@callora.org (PGP key fingerprint published in
+  `docs/AUDIT_BUNDLE.md`).
+- **Do not** open a public GitHub issue for undisclosed vulnerabilities.
+- **Include:** affected contract and entrypoint, a minimal reproduction
+  (test or transaction sequence), impact assessment, and any suggested fix.
+- **Acknowledgement:** we aim to acknowledge reports within 72 hours and
+  provide a remediation timeline within 7 days.
+- **Coordinated disclosure:** please allow up to 90 days before public
+  disclosure so a fix can be deployed and audited.
+- **Safe harbour:** good-faith research that respects user funds and privacy
+  will not be pursued legally.
+
+See `docs/AUDIT_BUNDLE.md` for the current audit scope, artifacts, and
+disclosure key material.
+
 ## require_auth() Audit (Issue #160)
 
 All privileged entrypoints across `vault`, `revenue_pool`, and `settlement` contracts
 have been audited for `require_auth()` coverage as part of Issue #160.
 
 ### Findings
-- All privileged functions call `require_auth()` on the caller before executing. âœ…
+- All privileged functions call `require_auth()` on the caller before executing. ✅
 - Negative tests added to each crate's `test.rs` confirming unauthenticated calls are rejected.
 
 ### Intentional Exceptions
@@ -260,6 +280,8 @@ have been audited for `require_auth()` coverage as part of Issue #160.
 |------------|------------------|--------|
 | settlement | `init()`         | One-time initializer guarded by already-initialized panic; no auth required by design. |
 | vault      | `require_owner()`| Internal helper using `assert!` for address equality. All public callers invoke `caller.require_auth()` before calling this helper, so host-level auth is enforced transitively. Documented gap: `require_owner` itself does not call `require_auth()`. |
+| revenue_pool | `distribute::init()` | Currently callable without authentication; tracked in [#265](https://github.com/CalloraOrg/Callora-Contracts/issues/265). |
+| revenue_pool | `set_upgrade_cooldown()` | Currently has no auth gate; tracked in [#266](https://github.com/CalloraOrg/Callora-Contracts/issues/266). |
 
 ### Cross-reference
 - Audit branch: `test/require-auth-sweep`

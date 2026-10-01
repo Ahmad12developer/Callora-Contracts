@@ -20,6 +20,7 @@ use soroban_sdk::contracterror;
 /// | 7    | AmountNegative      | Numeric amount must be non-negative                                 |
 /// | 8    | Overflow            | Arithmetic overflow was detected                                    |
 /// | 9    | OutOfRange          | Value falls outside the allowed inclusive `[min, max]` range        |
+/// | 10   | InvalidOfferingId   | Offering id is empty, too long, or uses bytes outside `[a-z0-9_-]`  |
 #[contracterror]
 #[repr(u32)]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
@@ -44,4 +45,7 @@ pub enum ValidatorError {
     Overflow = 8,
     /// Value falls outside the allowed inclusive `[min, max]` range (code 9).
     OutOfRange = 9,
+    /// Offering id is empty, longer than `MAX_OFFERING_ID_LEN`, has leading or
+    /// trailing spaces, or contains a byte outside `[a-z0-9_-]` (code 10).
+    InvalidOfferingId = 10,
 }

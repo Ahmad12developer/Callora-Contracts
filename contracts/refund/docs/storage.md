@@ -8,27 +8,16 @@ This document outlines the storage keys used by the Refund contract, detailing t
 - **Tier:** **Instance**
 - **Rationale:** The administrator address dictates access control for the entire contract. Because it is globally applicable and must survive as long as the contract is active, the `Instance` tier is used. This ensures the admin data shares the same Time-To-Live (TTL) as the contract instance itself, preventing access lockouts.
 
-### `DataKey::PendingAdmin`
-- **Tier:** **Instance**
-- **Data Type:** `Address` (Optional / Nullable)
-- **Rationale:** Used during a secure two-step admin transfer process to hold the nominated successor before they accept the role. Because this is a singleton configuration state tied directly to the contract's administration lifecycle, instance storage is appropriate.
-
-### `DataKey::RefundRequest(Address)`
+### `StorageKey::PendingRefund(u64)`
 - **Tier:** **Persistent**
-- **Rationale:** This key stores the refund request state for a specific user address, including the amount requested, timestamps, and approval status. Since refund requests must survive across contract invocations and are user-scoped, `Persistent` storage ensures the data is durably stored and cannot be arbitrarily dropped without an explicit archival process.
+- **Rationale:** Stores one refund request by sequential ID. Each request receives its own TTL bump when created, read, or processed.
 
-### `DataKey::ProcessedRefund(Address, u64)`
+### `StorageKey::RequesterRefunds(Address)`
 - **Tier:** **Persistent**
-- **Rationale:** Tracks completed refunds keyed by user address and a transaction nonce. This serves as an audit trail and replay-prevention mechanism. `Persistent` storage guarantees high availability for off-chain indexers and monitors.
+- **Data Type:** `Vec<u64>`
+- **Rationale:** Stores request IDs in creation order so clients can paginate a requester's history without scanning the global counter. The vector is capped at `MAX_REQUESTER_REFUNDS` (100); when full, the oldest index entry is evicted while the underlying request remains addressable by ID. Reads and writes bump the index TTL.
 
-### `DataKey::RateLimitCounter(Address)`
-- **Tier:** **Temporary**
-- **Rationale:** Tracks the number of refund requests initiated by a user within a rolling time window for rate-limiting purposes. Since this data becomes irrelevant after the window expires, it uses `Temporary` storage to significantly reduce state bloat and protocol fees.
-
-### `DataKey::Paused`
-- **Tier:** **Instance**
-- **Data Type:** `bool`
-- **Rationale:** Circuit-breaker flag that globally halts refund processing when set. As a singleton contract configuration value, it shares the contract instance's lifecycle and TTL.
+Use `get_refunds_by_requester(requester, start, limit)` for pages. `limit` is capped at 50, and `start` is a zero-based offset into the retained index.
 
 ## Storage Tiers Overview
 

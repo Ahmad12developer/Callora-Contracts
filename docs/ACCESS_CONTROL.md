@@ -108,20 +108,52 @@ is delayed by 24 hours. See [Admin developer balance migration](ADMIN_BALANCE_MI
 - **Pending Admin**: Nominee awaiting acceptance of the admin role.
 - **Pending Vault**: Proposed vault awaiting acceptance.
 
-### Authorization Matrix
+### Caller Matrix
 
-| Function | Admin | Vault | Pending Admin | Others |
-|----------|-------|-------|---------------|--------|
-| `receive_payment` | ✅ | ✅ | ❌ | ❌ |
-| `set_admin` | ✅ | ❌ | ❌ | ❌ |
-| `accept_admin` | ❌ | ❌ | ✅ | ❌ |
-| `cancel_admin_transfer` | ✅ | ❌ | ❌ | ❌ |
-| `propose_vault` | ✅ | ❌ | ❌ | ❌ |
-| `accept_vault` | ✅ | ✅ | ❌ | ❌ |
-| `set_vault` (alias of `propose_vault`) | ✅ | ❌ | ❌ | ❌ |
-| `set_developer_claim_window` | ✅ | ❌ | ❌ | ❌ |
-| `clear_developer_claim_window` | ✅ | ❌ | ❌ | ❌ |
-| `get_all_developer_balances` | ✅ | ❌ | ❌ | ❌ |
+| Entrypoint | Allowed Callers | Rationale |
+|------------|-----------------|-----------|
+| `init` | Admin | Initial contract setup and role assignment |
+| `record_deduction` | Vault | Accounting-only deduction logging from the vault |
+| `receive_payment` | Vault + Admin | Forwarding settlement payment from vault, or manual reconciliation by admin |
+| `batch_receive_payment` | Vault + Admin | Forwarding batch settlement payments from vault, or manual reconciliation by admin |
+| `set_developer_min_balance` (and alias `set_minimum_balance`) | Admin | Setting minimum balance floor per developer |
+| `propose_balance_migration` | Admin | Proposing developer balance migration |
+| `execute_balance_migration` | Admin | Executing matured developer balance migration |
+| `set_usdc_token` | Admin | Configuring settlement USDC token contract address |
+| `withdraw_developer_balance` | Developer | Developer claiming/withdrawing earned credits as USDC |
+| `set_developer_claim_window` | Admin | Restricting developer withdrawal time window |
+| `clear_developer_claim_window` | Admin | Removing developer withdrawal claim window |
+| `set_daily_withdraw_cap` | Admin | Configuring developer daily withdrawal limit |
+| `force_credit_developer` | Admin | Direct admin developer credit without moving tokens (manual reconciliation / dispute resolution) |
+| `get_all_developer_balances` | Admin | Restricted batch query of developer balances |
+| `get_developer_balances_page` | Admin | Restricted paginated query of developer balances |
+| `get_developer_balances_cursor` | Admin | Restricted cursor-paginated query of developer balances |
+| `set_admin` | Admin | Nominating new admin address (step 1 of two-step transfer) |
+| `accept_admin` | Pending Admin | Accepting admin nomination (step 2 of two-step transfer) |
+| `cancel_admin_transfer` | Admin | Cancelling pending admin nomination |
+| `propose_vault` (and alias `set_vault`) | Admin | Proposing new vault address (step 1 of two-step rotation) |
+| `accept_vault` | Proposed Vault + Admin | Finalizing pending vault rotation (step 2 of two-step rotation) |
+| `broadcast` | Admin | Broadcasting operator/emergency message |
+| `upgrade` | Admin | Upgrading contract code WASM |
+| `migrate_developer_balance` (and alias `migrate_single_dev_v2`) | Admin | Storage schema migration for developer balance |
+| `migrate_v1_to_v2` / `migrate_v1_to_v2_page` | Admin | Storage schema migration |
+| `batch_withdraw_balance_cursor` | Anyone | Compatibility placeholder for cursor batch withdrawals |
+| `batch_settle` | Anyone | Delegates to settlement batch helper |
+| `freeze_developer` | Admin | Freezing developer withdrawals |
+| `unfreeze_developer` | Admin | Unfreezing developer withdrawals |
+| `set_price` / `remove_price` | Admin | Price registry management |
+
+> [!NOTE]
+> Read-only view entrypoints (`get_admin`, `get_vault`, `get_global_pool`, `get_total_received`, `get_developer_balance`, `get_developer_min_balance`, `get_minimum_balance`, `get_developer_claim_window`, `get_daily_withdraw_cap`, `get_withdrawal_today`, `get_pending_admin`, `get_balance_migration`, `get_usdc_token`, `get_version`, `version`, `migration_storage_version`, `is_developer_frozen`, `get_price`, `simulate_claim`) do not require authentication and are accessible by any caller.
+
+### Dual-Caller Rule & Admin Security Model
+
+> [!IMPORTANT]
+> **Dual-Caller Security Risk**:
+> The dual-caller authorization model for `receive_payment` and `batch_receive_payment` allows both the registered `Vault` and the contract `Admin` to credit developer balances. Because the `Admin` can call these entrypoints directly (in addition to `force_credit_developer`), the admin key has the technical capability to mint developer credits directly.
+>
+> **Operator Guidance**:
+> Operators sizing admin key protections must recognize that a compromised or misconfigured admin key can credit developer balances directly. Admin keys should be protected using strong security configurations (e.g., Stellar native multisig thresholds, multi-party signing policies, hardware security modules, and strict key management controls).
 
 ### Security Model
 - **Two-Step Admin Rotation**: Prevents accidental loss of control by requiring the nominee to explicitly accept the role.
@@ -174,7 +206,7 @@ The Callora Revenue Pool contract processes USDC distribution to developer walle
 
 **Read-only entrypoints** (`get_admin`, `get_usdc_token`, `get_pending_admin`,
 `get_pause_guardian`, `is_paused`, `get_cumulative_yield_deposited`,
-`get_max_distribute`, `balance`, `get_version`, `version`, `get_storage_ttl`,
+`get_max_distribute`, `balance`, `get_version`, `version`, `get_ttl_policy`,
 `get_pending_emergency_drain`, `chunk_iter`) do **not** require auth and are
 callable by anyone.
 

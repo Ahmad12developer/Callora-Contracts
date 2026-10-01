@@ -86,7 +86,14 @@ fn setup_with_mock_all(
         &None,
         &None,
     );
-    (owner, vault_addr, client, usdc_addr, usdc_client, usdc_admin)
+    (
+        owner,
+        vault_addr,
+        client,
+        usdc_addr,
+        usdc_client,
+        usdc_admin,
+    )
 }
 
 /// Set up a vault **without** any pre-mocked auth, for tests that need to
@@ -142,10 +149,7 @@ fn add_address_requires_auth() {
 
     // No auth set — call must fail at require_auth.
     let res = client.try_add_address(&owner, &depositor);
-    assert!(
-        res.is_err(),
-        "add_address must require auth on caller"
-    );
+    assert!(res.is_err(), "add_address must require auth on caller");
 }
 
 /// `clear_all` must require auth on `caller`.
@@ -155,10 +159,7 @@ fn clear_all_requires_auth() {
     let (owner, _vault_addr, client, _usdc_addr) = setup_no_mock(&env);
 
     let res = client.try_clear_all(&owner);
-    assert!(
-        res.is_err(),
-        "clear_all must require auth on caller"
-    );
+    assert!(res.is_err(), "clear_all must require auth on caller");
 }
 
 /// `set_allowed_depositor` must require auth on `caller`.
@@ -241,14 +242,7 @@ fn mock_auth_add_address_owner_succeeds() {
     let (owner, _vault_addr, client, _usdc_addr) = setup_no_mock(&env);
     let depositor = Address::generate(&env);
 
-    mock_single_auth!(
-        &env,
-        &owner,
-        client,
-        "add_address",
-        &owner,
-        &depositor
-    );
+    mock_single_auth!(&env, &owner, client, "add_address", &owner, &depositor);
     client.add_address(&owner, &depositor);
 
     assert!(
@@ -266,14 +260,7 @@ fn mock_auth_clear_all_owner_succeeds() {
     let depositor = Address::generate(&env);
 
     // Seed the allowlist.
-    mock_single_auth!(
-        &env,
-        &owner,
-        client,
-        "add_address",
-        &owner,
-        &depositor
-    );
+    mock_single_auth!(&env, &owner, client, "add_address", &owner, &depositor);
     client.add_address(&owner, &depositor);
 
     // Clear with explicit mock auth.
@@ -281,10 +268,7 @@ fn mock_auth_clear_all_owner_succeeds() {
     client.clear_all(&owner);
 
     let list = client.get_allowlist();
-    assert!(
-        list.is_empty(),
-        "allowlist must be empty after clear_all"
-    );
+    assert!(list.is_empty(), "allowlist must be empty after clear_all");
 }
 
 /// When the owner provides explicit auth for `set_allowed_depositor`, the
@@ -331,13 +315,7 @@ fn mock_auth_clear_allowed_depositors_owner_succeeds() {
     client.set_allowed_depositor(&owner, &Some(depositor.clone()));
 
     // Clear with explicit mock auth.
-    mock_single_auth!(
-        &env,
-        &owner,
-        client,
-        "clear_allowed_depositors",
-        &owner
-    );
+    mock_single_auth!(&env, &owner, client, "clear_allowed_depositors", &owner);
     client.clear_allowed_depositors(&owner);
 
     assert!(
@@ -367,10 +345,7 @@ fn mock_auth_rejects_impersonation_on_add_address() {
 
     // `owner` calling without its own auth must fail.
     let res = client.try_add_address(&owner, &depositor);
-    assert!(
-        res.is_err(),
-        "mismatched signer must be rejected"
-    );
+    assert!(res.is_err(), "mismatched signer must be rejected");
 }
 
 /// Impersonation test: auth is set for `intruder` but the call is made with
@@ -451,14 +426,8 @@ fn mock_auth_rejects_impersonation_on_clear_allowed_depositors() {
 #[test]
 fn owner_with_auth_can_call_all_allowlist_entrypoints() {
     let env = Env::default();
-    let (
-        owner,
-        _vault_addr,
-        client,
-        _usdc_addr,
-        _usdc_client,
-        _usdc_admin,
-    ) = setup_with_mock_all(&env);
+    let (owner, _vault_addr, client, _usdc_addr, _usdc_client, _usdc_admin) =
+        setup_with_mock_all(&env);
 
     let dep1 = Address::generate(&env);
     let dep2 = Address::generate(&env);

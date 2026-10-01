@@ -365,33 +365,111 @@ Use this approach only when in-place upgrade is not possible (e.g., breaking sto
 
 #### C. Upgrading Settlement
 
-1. **Export state**
-   ```bash
-   soroban contract invoke --contract-id <SETTLE_ID> -- get_admin
-   soroban contract invoke --contract-id <SETTLE_ID> -- get_global_pool
-   soroban contract invoke --contract-id <SETTLE_ID> -- get_all_developer_balances
-   ```
+> **Note:** As of the timelocked-upgrade release, the settlement contract enforces a mandatory
+> **48-hour delay** between proposing and executing an upgrade. The instant `upgrade` function
+> is retained as a deprecated alias for `propose_upgrade` — it no longer applies the WASM
+> immediately. Call `execute_upgrade` after the delay to finalize.
 
-2. **Deploy new settlement WASM**
-   ```bash
-   cargo build --target wasm32-unknown-unknown --release -p callora-settlement
-   soroban contract deploy --wasm target/wasm32-unknown-unknown/release/callora_settlement.wasm --source <ADMIN_ACCOUNT>
-   ```
+##### In-Place Upgrade (Recommended)
 
-3. **Initialize new settlement**
-   ```bash
-   soroban contract invoke --contract-id <NEW_SETTLE_ID> -- init \
-     --admin <ADMIN> \
-     --vault_address <VAULT_ADDRESS>
-   ```
+The settlement contract supports admin-gated, timelocked in-place WASM upgrades that preserve
+all developer balances and contract state.
 
-4. **Re-credit developer balances**
-   - Call `receive_payment` for each developer with their balance
-   - Or implement a migration helper contract
+**Step 1 — Build new WASM**
 
-5. **Update vault references**
+```bash
+cargo build --target wasm32-unknown-unknown --release -p callora-settlement
+```
 
-6. **Decommission old settlement**
+**Step 2 — Upload WASM and obtain hash**
+
+```bash
+soroban contract install \
+  --wasm target/wasm32-unknown-unknown/release/callora_settlement.wasm
+# Returns: <NEW_WASM_HASH>
+```
+
+**Step 3 — Propose the upgrade (admin only)**
+
+```bash
+soroban contract invoke --contract-id <SETTLEMENT_ID> -- propose_upgrade \
+  --caller <ADMIN> \
+  --new_wasm_hash <NEW_WASM_HASH>
+```
+
+This records a [`PendingUpgrade`] snapshot and emits an `upgrade_proposed` event containing:
+
+| Field | Value |
+|---|---|
+| `wasm_hash` | `<NEW_WASM_HASH>` |
+| `proposed_at` | ledger timestamp at proposal |
+| `execute_after` | `proposed_at + 172800` (48 h) |
+
+**Step 4 — Verify the proposal is visible**
+
+```bash
+soroban contract invoke --contract-id <SETTLEMENT_ID> -- get_pending_upgrade
+# Returns the PendingUpgrade struct, or null if no proposal exists.
+```
+
+**Step 5 — Wait for the 48-hour window to elapse**
+
+Off-chain watchers and security teams should monitor `upgrade_proposed` events.
+If anything looks wrong, the admin can abort immediately — see Step 6.
+
+**Step 6 (optional) — Cancel**
+
+```bash
+soroban contract invoke --contract-id <SETTLEMENT_ID> -- cancel_upgrade \
+  --caller <ADMIN>
+# Emits upgrade_cancelled and clears the proposal.
+```
+
+Cancellation may be called at any time before execution, including before the delay has
+expired. After cancellation, `get_pending_upgrade` returns `null`.
+
+**Step 7 — Execute the upgrade (after delay)**
+
+```bash
+soroban contract invoke --contract-id <SETTLEMENT_ID> -- execute_upgrade \
+  --caller <ADMIN>
+# Applies the WASM, clears the proposal, emits `upgraded`.
+```
+
+Calling before `execute_after` will return `UpgradeTimelockNotExpired (45)`.
+
+**Step 8 — Verify**
+
+```bash
+soroban contract invoke --contract-id <SETTLEMENT_ID> -- get_version
+# Should return <NEW_WASM_HASH>
+
+soroban contract invoke --contract-id <SETTLEMENT_ID> -- get_pending_upgrade
+# Should return null (proposal cleared)
+
+soroban contract invoke --contract-id <SETTLEMENT_ID> -- get_admin
+soroban contract invoke --contract-id <SETTLEMENT_ID> -- get_global_pool
+```
+
+##### Upgrade Events
+
+| Event topic | Emitted by | Key data |
+|---|---|---|
+| `upgrade_proposed` | `propose_upgrade` | `wasm_hash`, `proposed_at`, `execute_after` |
+| `upgrade_cancelled` | `cancel_upgrade` | `wasm_hash`, `cancelled_at` |
+| `upgraded` | `execute_upgrade` | `new_wasm_hash` |
+
+##### Error Codes
+
+| Code | Variant | Meaning |
+|---|---|---|
+| 43 | `NoUpgradePending` | `execute_upgrade` / `cancel_upgrade` called with no active proposal |
+| 44 | `ZeroWasmHash` | All-zero `new_wasm_hash` rejected by `propose_upgrade` |
+| 45 | `UpgradeTimelockNotExpired` | `execute_upgrade` called before `execute_after` |
+
+##### Full Redeployment (Legacy / Fallback)
+
+Use only when an in-place upgrade is not feasible (e.g., breaking storage schema changes).
 
 ---
 
@@ -603,7 +681,8 @@ Per the contribution guidelines:
 
 | Aspect | Recommendation |
 |--------|----------------|
-| **Upgrade approach** | Deploy new contract, migrate state, redirect traffic |
+| **Upgrade approach** | In-place timelocked upgrade (settlement); deploy new contract for full rewrites |
+| **Settlement upgrade flow** | `propose_upgrade` → wait 48 h → `execute_upgrade` (cancel with `cancel_upgrade`) |
 | **Upgrade order** | Settlement → Revenue Pool → Vault |
 | **Rollback** | Not supported; deploy previous WASM as new instance |
 | **Admin keys** | Hardware wallet or multisig; rotate via `set_admin` |

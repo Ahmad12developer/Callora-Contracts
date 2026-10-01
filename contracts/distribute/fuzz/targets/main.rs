@@ -20,9 +20,9 @@
 
 #![no_main]
 
+use callora_distribute::{Distribute, DistributeClient};
 use libfuzzer_sys::fuzz_target;
 use soroban_sdk::{testutils::Address as _, Address, Env, IntoVal, Symbol};
-use callora_distribute::{Distribute, DistributeClient};
 
 // ── Fuzz operation enum ────────────────────────────────────────────────
 
@@ -43,7 +43,9 @@ enum FuzzOp {
 }
 
 fn parse_op(data: &[u8], pos: &mut usize) -> Option<FuzzOp> {
-    if *pos >= data.len() { return None; }
+    if *pos >= data.len() {
+        return None;
+    }
     let tag = data[*pos] % 11;
     *pos += 1;
 
@@ -56,26 +58,62 @@ fn parse_op(data: &[u8], pos: &mut usize) -> Option<FuzzOp> {
             to: Address::generate(&Env::default()),
             amount: if *pos + 8 <= data.len() {
                 let v = i128::from_le_bytes([
-                    data[*pos], data[*pos+1], data[*pos+2], data[*pos+3],
-                    data[*pos+4], data[*pos+5], data[*pos+6], data[*pos+7], 0,0,0,0,0,0,0,0,
+                    data[*pos],
+                    data[*pos + 1],
+                    data[*pos + 2],
+                    data[*pos + 3],
+                    data[*pos + 4],
+                    data[*pos + 5],
+                    data[*pos + 6],
+                    data[*pos + 7],
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
                 ]);
                 *pos += 8;
                 v
-            } else { 1 },
+            } else {
+                1
+            },
         },
         2 => FuzzOp::BatchDistribute,
         3 => FuzzOp::SetMaxDistribute {
             amount: if *pos + 8 <= data.len() {
                 let v = i128::from_le_bytes([
-                    data[*pos], data[*pos+1], data[*pos+2], data[*pos+3],
-                    data[*pos+4], data[*pos+5], data[*pos+6], data[*pos+7], 0,0,0,0,0,0,0,0,
+                    data[*pos],
+                    data[*pos + 1],
+                    data[*pos + 2],
+                    data[*pos + 3],
+                    data[*pos + 4],
+                    data[*pos + 5],
+                    data[*pos + 6],
+                    data[*pos + 7],
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
                 ]);
                 *pos += 8;
                 v
-            } else { 0 },
+            } else {
+                0
+            },
         },
         4 => FuzzOp::SetPaused {
-            paused: if *pos < data.len() { data[*pos] % 2 == 0 } else { false },
+            paused: if *pos < data.len() {
+                data[*pos] % 2 == 0
+            } else {
+                false
+            },
         },
         5 => FuzzOp::TransferAdmin {
             new_admin: Address::generate(&Env::default()),
@@ -118,16 +156,22 @@ fuzz_target!(|data: &[u8]| {
         match op {
             FuzzOp::Distribute { to, amount } => {
                 let _ = client.try_distribute(&to, &amount);
-            },
+            }
             FuzzOp::SetMaxDistribute { amount } => {
                 let _ = client.try_set_max_distribute(&amount);
-            },
+            }
             FuzzOp::SetPaused { paused } => {
                 let _ = client.try_set_paused(&paused);
-            },
-            FuzzOp::GetAdmin => { client.get_admin(); },
-            FuzzOp::GetMaxDistribute => { client.get_max_distribute(); },
-            FuzzOp::GetPaused => { client.get_paused(); },
+            }
+            FuzzOp::GetAdmin => {
+                client.get_admin();
+            }
+            FuzzOp::GetMaxDistribute => {
+                client.get_max_distribute();
+            }
+            FuzzOp::GetPaused => {
+                client.get_paused();
+            }
             _ => {}
         }
     }

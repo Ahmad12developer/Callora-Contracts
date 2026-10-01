@@ -50,7 +50,9 @@
 //! | `migrate`            | `stake_migrated`| `(topic)`        | `target_version` |
 //! | `authorize_upgrade`  | `upg_authorised`| `(topic, hash)`  | `target_version` |
 
-use soroban_sdk::{contract, contracterror, contractimpl, contracttype, Address, BytesN, Env, Symbol};
+use soroban_sdk::{
+    contract, contracterror, contractimpl, contracttype, Address, BytesN, Env, Symbol,
+};
 
 // ─── Storage keys ─────────────────────────────────────────────────────────────
 
@@ -127,6 +129,8 @@ pub enum StakeMigrateError {
     UpgradeNotAuthorized = 9,
     /// Arithmetic overflow detected in a checked operation.
     Overflow = 10,
+    /// The supplied WASM hash is all-zero bytes (almost certainly a mistake).
+    WasmHashZero = 11,
 }
 
 // ─── Event symbol helpers ─────────────────────────────────────────────────────
@@ -165,11 +169,7 @@ impl CalloraStakeMigrate {
     /// # Errors
     ///
     /// Returns [`StakeMigrateError::AlreadyInitialized`] if already initialised.
-    pub fn init(
-        env: Env,
-        admin: Address,
-        initial_version: u32,
-    ) -> Result<(), StakeMigrateError> {
+    pub fn init(env: Env, admin: Address, initial_version: u32) -> Result<(), StakeMigrateError> {
         admin.require_auth();
         if env.storage().instance().has(&StorageKey::Admin) {
             return Err(StakeMigrateError::AlreadyInitialized);
@@ -262,9 +262,7 @@ impl CalloraStakeMigrate {
             reserve: 0,
         };
 
-        env.storage()
-            .instance()
-            .set(&StorageKey::Current, &current);
+        env.storage().instance().set(&StorageKey::Current, &current);
         env.storage()
             .instance()
             .set(&StorageKey::Version, &target_version);
@@ -295,6 +293,7 @@ impl CalloraStakeMigrate {
     /// | Contract not initialised           | [`StakeMigrateError::NotInitialized`]  |
     /// | Caller is not the admin            | [`StakeMigrateError::Unauthorized`]    |
     /// | `target_version` ≠ stored version  | [`StakeMigrateError::VersionMismatch`] |
+    /// | `wasm_hash` is all-zero bytes      | [`StakeMigrateError::WasmHashZero`]    |
     ///
     /// # Events
     ///
@@ -317,6 +316,12 @@ impl CalloraStakeMigrate {
 
         if target_version != version {
             return Err(StakeMigrateError::VersionMismatch);
+        }
+
+        // Reject an all-zero hash — almost certainly a programming mistake
+        // (e.g. a zero-initialised buffer passed by a deployment script).
+        if wasm_hash == BytesN::from_array(&env, &[0u8; 32]) {
+            return Err(StakeMigrateError::WasmHashZero);
         }
 
         env.storage().instance().set(
@@ -352,8 +357,7 @@ impl CalloraStakeMigrate {
     /// - Both the stored version and the authorised version match **and** the
     ///   supplied hash matches the authorised hash.
     pub fn is_upgrade_authorised(env: Env, wasm_hash: BytesN<32>) -> bool {
-        let stored_version: Option<u32> =
-            env.storage().instance().get(&StorageKey::Version);
+        let stored_version: Option<u32> = env.storage().instance().get(&StorageKey::Version);
         let authorisation: Option<(u32, BytesN<32>)> =
             env.storage().instance().get(&StorageKey::AuthorisedUpgrade);
 

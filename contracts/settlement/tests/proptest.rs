@@ -198,7 +198,7 @@ fn check_invariant(
 ) {
     let balances = client.get_all_developer_balances(admin, usdc_addr);
     let dev_sum: i128 = balances.iter().map(|b| b.balance).sum();
-    let pool = client.get_global_pool().unwrap().total_balance;
+    let pool = client.get_global_pool().total_balance;
 
     if dev_sum != expected_dev_total || pool != expected_pool_total {
         trace.panic_invariant(
@@ -517,7 +517,7 @@ fn test_invariant_pool_only() {
         ledger_seq += 1;
         client.receive_payment(&vault, &amount, &true, &None, &usdc_addr, &ledger_seq);
         expected_pool += amount;
-        let pool = client.get_global_pool().unwrap().total_balance;
+        let pool = client.get_global_pool().total_balance;
         assert_eq!(
             pool, expected_pool,
             "pool invariant failed at step {i}: expected {expected_pool}, got {pool}"
@@ -571,7 +571,7 @@ fn test_invariant_single_dev_full_withdraw() {
     );
     client.receive_payment(&vault, &500, &false, &Some(dev.clone()), &usdc_addr, &3u32);
 
-    let balance = client.get_developer_balance(&dev, &usdc_addr).unwrap();
+    let balance = client.get_developer_balance(&dev, &usdc_addr);
     assert_eq!(balance, 3_500);
 
     let dev_sum: i128 = client
@@ -591,7 +591,7 @@ fn test_invariant_single_dev_full_withdraw() {
         .sum();
     assert_eq!(dev_sum_after, 0, "dev sum must be 0 after full withdraw");
     assert_eq!(
-        client.get_global_pool().unwrap().total_balance,
+        client.get_global_pool().total_balance,
         0,
         "pool must stay 0"
     );
@@ -695,7 +695,7 @@ fn test_invariant_interleaved_dev_and_pool() {
             .iter()
             .map(|b| b.balance)
             .sum();
-        let pool = client.get_global_pool().unwrap().total_balance;
+        let pool = client.get_global_pool().total_balance;
         assert_eq!(dev_sum, exp_dev, "dev sum mismatch");
         assert_eq!(pool, exp_pool, "pool mismatch");
     }
@@ -754,6 +754,6 @@ fn test_invariant_daily_withdraw_cap() {
     let res = client.try_withdraw_developer_balance(&dev, &1_000, &None);
     assert!(res.is_err());
 
-    let balance = client.get_developer_balance(&dev, &usdc_addr).unwrap();
+    let balance = client.get_developer_balance(&dev, &usdc_addr);
     assert_eq!(balance, 3_500);
 }

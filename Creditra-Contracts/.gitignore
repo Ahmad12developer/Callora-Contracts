@@ -1,0 +1,24 @@
+/target
+# Root workspace lock is committed (reproducible builds); the anchored pattern
+# keeps sub-workspace lock files (e.g. contracts/creditra-credit/Cargo.lock)
+# committable too.
+/Cargo.lock
+**/*.rs.bk
+.env
+/coverage
+test_snapshots/
+*.proptest-regressions
+*.profraw
+**/*.profraw
+/docs/superpowers/
+/.remember/
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+rustup-init.exe
+verify_preservation_baseline.exe
+verify_preservation_baseline.pdb
+*.wasm
+.aider*

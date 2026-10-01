@@ -1,17 +1,15 @@
 #![no_std]
 //! Callora cold-storage capability surface.
 //!
-//! The hot/cold balance split lives as an accounting partition inside the
-//! vault (`contracts/vault/src/cold_storage.rs`). This crate exposes a
-//! **read-only** [`views::capabilities`] bitmap so clients can detect which
-//! cold features a deployment supports without parsing version strings.
+//! The vault does not currently expose the planned hot/cold accounting
+//! partition. This crate exposes a **read-only** [`views::capabilities`]
+//! bitmap so clients can detect that no cold features are currently
+//! supported without parsing version strings.
 //!
 //! # Quick-start
 //! ```ignore
 //! let caps = client.capabilities();
-//! if caps & CAP_COLD_MULTISIG_SWEEP != 0 {
-//!     // safe to drive propose/approve cold-sweep flow
-//! }
+//! assert_eq!(caps, 0);
 //! ```
 
 mod views;
@@ -26,9 +24,8 @@ use soroban_sdk::{contract, contractimpl, Env};
 
 /// Thin contract facade that exposes cold capability discovery on-chain.
 ///
-/// Cold accounting itself remains in the vault; this entrypoint exists so
-/// integrators (and capability-delta monitors) have a stable `capabilities()`
-/// view keyed to the cold feature set.
+/// This entrypoint remains stable while the cold-storage functionality is
+/// unshipped; it currently reports an empty capability mask.
 #[contract]
 pub struct CalloraCold;
 

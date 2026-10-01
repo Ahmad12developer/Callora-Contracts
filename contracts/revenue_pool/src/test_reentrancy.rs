@@ -93,13 +93,7 @@ impl MaliciousToken {
     /// * `caller` — the address to pass as `caller` when re-entering
     /// * `active` — whether the next `transfer` should trigger reentrancy
     /// * `kind`   — one of `"distribute"`, `"set_admin"`, `"pause"`, `"batch_distribute"`
-    pub fn set_attack_config(
-        env: Env,
-        pool: Address,
-        caller: Address,
-        active: bool,
-        kind: Symbol,
-    ) {
+    pub fn set_attack_config(env: Env, pool: Address, caller: Address, active: bool, kind: Symbol) {
         env.storage()
             .instance()
             .set(&Symbol::new(&env, "pool_addr"), &pool);
@@ -123,10 +117,18 @@ impl MaliciousToken {
 fn create_real_usdc<'a>(
     env: &'a Env,
     admin: &Address,
-) -> (Address, soroban_sdk::token::Client<'a>, soroban_sdk::token::StellarAssetClient<'a>) {
+) -> (
+    Address,
+    soroban_sdk::token::Client<'a>,
+    soroban_sdk::token::StellarAssetClient<'a>,
+) {
     let contract_address = env.register_stellar_asset_contract_v2(admin.clone());
     let addr = contract_address.address();
-    (addr.clone(), soroban_sdk::token::Client::new(env, &addr), soroban_sdk::token::StellarAssetClient::new(env, &addr))
+    (
+        addr.clone(),
+        soroban_sdk::token::Client::new(env, &addr),
+        soroban_sdk::token::StellarAssetClient::new(env, &addr),
+    )
 }
 
 /// Deploy the revenue pool with the malicious token as its USDC.
@@ -172,16 +174,10 @@ fn count_events(env: &Env, contract: &Address, event_name: &str) -> u32 {
 #[test]
 fn test_distribute_reentry_distribute() {
     let env = Env::default();
-    let (pool_addr, pool_client, token_addr, _real_usdc, admin) =
-        setup_reentrancy_test(&env);
+    let (pool_addr, pool_client, token_addr, _real_usdc, admin) = setup_reentrancy_test(&env);
 
     let token_mock = MaliciousTokenClient::new(&env, &token_addr);
-    token_mock.set_attack_config(
-        &pool_addr,
-        &admin,
-        &true,
-        &Symbol::new(&env, "distribute"),
-    );
+    token_mock.set_attack_config(&pool_addr, &admin, &true, &Symbol::new(&env, "distribute"));
 
     let recipient = Address::generate(&env);
     let result = pool_client.try_distribute(&admin, &recipient, &200);
@@ -201,21 +197,18 @@ fn test_distribute_reentry_distribute() {
 #[test]
 fn test_distribute_reentry_set_admin() {
     let env = Env::default();
-    let (pool_addr, pool_client, token_addr, _real_usdc, admin) =
-        setup_reentrancy_test(&env);
+    let (pool_addr, pool_client, token_addr, _real_usdc, admin) = setup_reentrancy_test(&env);
 
     let token_mock = MaliciousTokenClient::new(&env, &token_addr);
-    token_mock.set_attack_config(
-        &pool_addr,
-        &admin,
-        &true,
-        &Symbol::new(&env, "set_admin"),
-    );
+    token_mock.set_attack_config(&pool_addr, &admin, &true, &Symbol::new(&env, "set_admin"));
 
     let recipient = Address::generate(&env);
     let result = pool_client.try_distribute(&admin, &recipient, &100);
 
-    assert!(result.is_ok(), "distribute must complete despite set_admin reentry");
+    assert!(
+        result.is_ok(),
+        "distribute must complete despite set_admin reentry"
+    );
     assert_eq!(
         pool_client.get_admin(),
         admin,
@@ -230,21 +223,18 @@ fn test_distribute_reentry_set_admin() {
 #[test]
 fn test_distribute_reentry_pause() {
     let env = Env::default();
-    let (pool_addr, pool_client, token_addr, _real_usdc, admin) =
-        setup_reentrancy_test(&env);
+    let (pool_addr, pool_client, token_addr, _real_usdc, admin) = setup_reentrancy_test(&env);
 
     let token_mock = MaliciousTokenClient::new(&env, &token_addr);
-    token_mock.set_attack_config(
-        &pool_addr,
-        &admin,
-        &true,
-        &Symbol::new(&env, "pause"),
-    );
+    token_mock.set_attack_config(&pool_addr, &admin, &true, &Symbol::new(&env, "pause"));
 
     let recipient = Address::generate(&env);
     let result = pool_client.try_distribute(&admin, &recipient, &100);
 
-    assert!(result.is_ok(), "distribute must complete despite pause reentry");
+    assert!(
+        result.is_ok(),
+        "distribute must complete despite pause reentry"
+    );
     assert!(
         !pool_client.is_paused(),
         "pool must NOT be paused by re-entrant pause"
@@ -262,16 +252,10 @@ fn test_distribute_reentry_pause() {
 #[test]
 fn test_batch_distribute_reentry_distribute() {
     let env = Env::default();
-    let (pool_addr, pool_client, token_addr, _real_usdc, admin) =
-        setup_reentrancy_test(&env);
+    let (pool_addr, pool_client, token_addr, _real_usdc, admin) = setup_reentrancy_test(&env);
 
     let token_mock = MaliciousTokenClient::new(&env, &token_addr);
-    token_mock.set_attack_config(
-        &pool_addr,
-        &admin,
-        &true,
-        &Symbol::new(&env, "distribute"),
-    );
+    token_mock.set_attack_config(&pool_addr, &admin, &true, &Symbol::new(&env, "distribute"));
 
     let dev1 = Address::generate(&env);
     let dev2 = Address::generate(&env);
@@ -300,23 +284,20 @@ fn test_batch_distribute_reentry_distribute() {
 #[test]
 fn test_batch_distribute_reentry_set_admin() {
     let env = Env::default();
-    let (pool_addr, pool_client, token_addr, _real_usdc, admin) =
-        setup_reentrancy_test(&env);
+    let (pool_addr, pool_client, token_addr, _real_usdc, admin) = setup_reentrancy_test(&env);
 
     let token_mock = MaliciousTokenClient::new(&env, &token_addr);
-    token_mock.set_attack_config(
-        &pool_addr,
-        &admin,
-        &true,
-        &Symbol::new(&env, "set_admin"),
-    );
+    token_mock.set_attack_config(&pool_addr, &admin, &true, &Symbol::new(&env, "set_admin"));
 
     let mut payments: Vec<(Address, i128)> = Vec::new(&env);
     payments.push_back((Address::generate(&env), 100));
 
     let result = pool_client.try_batch_distribute(&admin, &payments);
 
-    assert!(result.is_ok(), "batch_distribute must complete despite set_admin reentry");
+    assert!(
+        result.is_ok(),
+        "batch_distribute must complete despite set_admin reentry"
+    );
     assert_eq!(
         pool_client.get_admin(),
         admin,
@@ -330,16 +311,10 @@ fn test_batch_distribute_reentry_set_admin() {
 #[test]
 fn test_batch_distribute_reentry_pause() {
     let env = Env::default();
-    let (pool_addr, pool_client, token_addr, _real_usdc, admin) =
-        setup_reentrancy_test(&env);
+    let (pool_addr, pool_client, token_addr, _real_usdc, admin) = setup_reentrancy_test(&env);
 
     let token_mock = MaliciousTokenClient::new(&env, &token_addr);
-    token_mock.set_attack_config(
-        &pool_addr,
-        &admin,
-        &true,
-        &Symbol::new(&env, "pause"),
-    );
+    token_mock.set_attack_config(&pool_addr, &admin, &true, &Symbol::new(&env, "pause"));
 
     let dev1 = Address::generate(&env);
     let dev2 = Address::generate(&env);
@@ -349,7 +324,10 @@ fn test_batch_distribute_reentry_pause() {
 
     let result = pool_client.try_batch_distribute(&admin, &payments);
 
-    assert!(result.is_ok(), "batch_distribute must complete despite pause reentry");
+    assert!(
+        result.is_ok(),
+        "batch_distribute must complete despite pause reentry"
+    );
     assert!(
         !pool_client.is_paused(),
         "pool must NOT be paused by re-entrant pause during batch"

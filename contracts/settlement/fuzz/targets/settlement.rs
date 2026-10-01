@@ -38,7 +38,7 @@
 
 use libfuzzer_sys::fuzz_target;
 use soroban_sdk::testutils::Address as _;
-use soroban_sdk::token::StellarAssetClient;
+use soroban_sdk::token::{Client as TokenClient, StellarAssetClient};
 use soroban_sdk::{Address, Env, Vec as SorobanVec};
 
 use callora_settlement::batch::{SettleInput, SettleOutcome};
@@ -90,6 +90,7 @@ fuzz_target!(|data: &[u8]| {
         .register_stellar_asset_contract_v2(admin.clone())
         .address();
     let usdc_admin = StellarAssetClient::new(&env, &usdc_addr);
+    let usdc_token = TokenClient::new(&env, &usdc_addr);
 
     client.init(&admin, &vault);
     client.set_usdc_token(&admin, &usdc_addr);
@@ -141,7 +142,7 @@ fuzz_target!(|data: &[u8]| {
     let n = settlements.len();
 
     // ── Snapshot pre-state ─────────────────────────────────────────────
-    let contract_usdc_before = usdc_admin.balance(&contract_addr);
+    let contract_usdc_before = usdc_token.balance(&contract_addr);
     let dev_balances_before: std::vec::Vec<i128> = devs
         .iter()
         .map(|d| client.get_developer_balance(d, &usdc_addr))
@@ -152,7 +153,7 @@ fuzz_target!(|data: &[u8]| {
         client.batch_settle(&settlements)
     }));
 
-    let contract_usdc_after = usdc_admin.balance(&contract_addr);
+    let contract_usdc_after = usdc_token.balance(&contract_addr);
     let dev_balances_after: std::vec::Vec<i128> = devs
         .iter()
         .map(|d| client.get_developer_balance(d, &usdc_addr))

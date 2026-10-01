@@ -5,8 +5,9 @@ on:
     - cron: '0 2 * * *' # Run nightly at 2:00 AM UTC
 
 jobs:
+  # Diagnostic scheduled job — explicitly non-blocking.
   ttl-doctor:
-    name: Run Storage TTL Doctor
+    name: Run Storage TTL Doctor (optional — non-blocking)
     runs-on: ubuntu-latest
     continue-on-error: true
     steps:

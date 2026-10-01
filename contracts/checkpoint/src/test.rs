@@ -1023,3 +1023,420 @@ fn test_fuzz_discovered_unauthenticated_auth_gate() {
     let res = client.try_create_checkpoint(&admin, &subject, &token, &100i128, &meta);
     assert!(res.is_err(), "expected auth failure when unauthenticated");
 }
+
+// ===========================================================================
+// get_checkpoints_for_subject tests (issue #1202)
+// ===========================================================================
+//
+// Acceptance criteria:
+//  1. Subject view returns IDs in creation order
+//  2. Batch creation updates the index for each subject
+//  3. Index entries get TTL bumps
+//  4. Subject view caps page size at MAX_PAGE_SIZE
+//  5. Unknown subject returns empty vec (not an error)
+//  6. limit=0 returns InvalidPageSize
+
+/// AC-1: Single-create path returns IDs in creation order for the subject.
+#[test]
+fn test_get_checkpoints_for_subject_creation_order_single() {
+    let (env, admin, client) = setup();
+    let subject = Address::generate(&env);
+    let other = Address::generate(&env);
+    let token = Address::generate(&env);
+    let meta = Symbol::new(&env, "order");
+
+    // Interleave checkpoints for two subjects.
+    let id1 = client.create_checkpoint(&admin, &subject, &token, &100i128, &meta);
+    let _id2 = client.create_checkpoint(&admin, &other, &token, &200i128, &meta);
+    let id3 = client.create_checkpoint(&admin, &subject, &token, &300i128, &meta);
+    let _id4 = client.create_checkpoint(&admin, &other, &token, &400i128, &meta);
+    let id5 = client.create_checkpoint(&admin, &subject, &token, &500i128, &meta);
+
+    let results = client.get_checkpoints_for_subject(&subject, &0u32, &10u32);
+    assert_eq!(results.len(), 3);
+    assert_eq!(results.get(0).unwrap().id, id1);
+    assert_eq!(results.get(1).unwrap().id, id3);
+    assert_eq!(results.get(2).unwrap().id, id5);
+
+    // Balances must also be correct and in order.
+    assert_eq!(results.get(0).unwrap().balance, 100);
+    assert_eq!(results.get(1).unwrap().balance, 300);
+    assert_eq!(results.get(2).unwrap().balance, 500);
+}
+
+/// AC-1: IDs are strictly ascending in the returned slice.
+#[test]
+fn test_get_checkpoints_for_subject_ids_ascending() {
+    let (env, admin, client) = setup();
+    let subject = Address::generate(&env);
+    let token = Address::generate(&env);
+    let meta = Symbol::new(&env, "asc");
+
+    for i in 1..=8u64 {
+        client.create_checkpoint(&admin, &subject, &token, &(i as i128 * 10), &meta);
+    }
+
+    let results = client.get_checkpoints_for_subject(&subject, &0u32, &20u32);
+    assert_eq!(results.len(), 8);
+    for i in 1..results.len() {
+        let prev_id = results.get(i - 1).unwrap().id;
+        let curr_id = results.get(i).unwrap().id;
+        assert!(
+            curr_id > prev_id,
+            "IDs must be strictly ascending: {} vs {}",
+            prev_id,
+            curr_id
+        );
+    }
+}
+
+/// AC-2: Batch creation updates the subject index for every distinct subject.
+#[test]
+fn test_get_checkpoints_for_subject_batch_updates_each_subject() {
+    let (env, admin, client) = setup();
+    let subject_a = Address::generate(&env);
+    let subject_b = Address::generate(&env);
+    let subject_c = Address::generate(&env);
+    let token = Address::generate(&env);
+    let meta = Symbol::new(&env, "batch_idx");
+
+    let items = Vec::from_array(
+        &env,
+        [
+            (subject_a.clone(), token.clone(), 100i128, meta.clone()),
+            (subject_b.clone(), token.clone(), 200i128, meta.clone()),
+            (subject_a.clone(), token.clone(), 300i128, meta.clone()),
+            (subject_c.clone(), token.clone(), 400i128, meta.clone()),
+            (subject_b.clone(), token.clone(), 500i128, meta.clone()),
+        ],
+    );
+
+    let ids = client.batch_create_checkpoints(&admin, &items);
+    assert_eq!(ids.len(), 5);
+
+    // subject_a gets IDs 1 and 3
+    let a_records = client.get_checkpoints_for_subject(&subject_a, &0u32, &10u32);
+    assert_eq!(a_records.len(), 2);
+    assert_eq!(a_records.get(0).unwrap().id, ids.get(0).unwrap());
+    assert_eq!(a_records.get(1).unwrap().id, ids.get(2).unwrap());
+
+    // subject_b gets IDs 2 and 5
+    let b_records = client.get_checkpoints_for_subject(&subject_b, &0u32, &10u32);
+    assert_eq!(b_records.len(), 2);
+    assert_eq!(b_records.get(0).unwrap().id, ids.get(1).unwrap());
+    assert_eq!(b_records.get(1).unwrap().id, ids.get(4).unwrap());
+
+    // subject_c gets ID 4
+    let c_records = client.get_checkpoints_for_subject(&subject_c, &0u32, &10u32);
+    assert_eq!(c_records.len(), 1);
+    assert_eq!(c_records.get(0).unwrap().id, ids.get(3).unwrap());
+}
+
+/// AC-2: Mixed single and batch creates both update the subject index.
+#[test]
+fn test_get_checkpoints_for_subject_mixed_single_and_batch() {
+    let (env, admin, client) = setup();
+    let subject = Address::generate(&env);
+    let token = Address::generate(&env);
+    let meta = Symbol::new(&env, "mixed");
+
+    // Single creates.
+    let id1 = client.create_checkpoint(&admin, &subject, &token, &100i128, &meta);
+    let id2 = client.create_checkpoint(&admin, &subject, &token, &200i128, &meta);
+
+    // Batch create — should extend the same index.
+    let items = Vec::from_array(
+        &env,
+        [
+            (subject.clone(), token.clone(), 300i128, meta.clone()),
+            (subject.clone(), token.clone(), 400i128, meta.clone()),
+        ],
+    );
+    let batch_ids = client.batch_create_checkpoints(&admin, &items);
+
+    let results = client.get_checkpoints_for_subject(&subject, &0u32, &10u32);
+    assert_eq!(results.len(), 4);
+    assert_eq!(results.get(0).unwrap().id, id1);
+    assert_eq!(results.get(1).unwrap().id, id2);
+    assert_eq!(results.get(2).unwrap().id, batch_ids.get(0).unwrap());
+    assert_eq!(results.get(3).unwrap().id, batch_ids.get(1).unwrap());
+}
+
+/// AC-3: Subject index TTL is bumped on each read.
+#[test]
+fn test_get_checkpoints_for_subject_bumps_index_ttl_on_read() {
+    let (env, admin, client) = setup();
+    let subject = Address::generate(&env);
+    let token = Address::generate(&env);
+    let meta = Symbol::new(&env, "idx_ttl");
+
+    client.create_checkpoint(&admin, &subject, &token, &100i128, &meta);
+
+    let index_key = StorageKey::SubjectIndex(subject.clone());
+
+    // Advance ledger so the TTL has dropped below the bump threshold.
+    let seq = env.ledger().sequence();
+    env.as_contract(&client.address, || {
+        env.storage()
+            .instance()
+            .extend_ttl(BUMP_AMOUNT, BUMP_AMOUNT);
+    });
+    env.ledger()
+        .set_sequence_number(seq + BUMP_AMOUNT - LIFETIME_THRESHOLD + 1);
+
+    let ttl_before = env
+        .as_contract(&client.address, || {
+            env.storage().persistent().get_ttl(&index_key)
+        });
+    assert!(
+        ttl_before < LIFETIME_THRESHOLD,
+        "sanity: TTL should be below threshold before read, got {}",
+        ttl_before
+    );
+
+    // Read must bump the index TTL back to BUMP_AMOUNT.
+    let results = client.get_checkpoints_for_subject(&subject, &0u32, &10u32);
+    assert_eq!(results.len(), 1);
+
+    let ttl_after = env
+        .as_contract(&client.address, || {
+            env.storage().persistent().get_ttl(&index_key)
+        });
+    assert_eq!(
+        ttl_after, BUMP_AMOUNT,
+        "get_checkpoints_for_subject must bump index TTL to BUMP_AMOUNT, got {}",
+        ttl_after
+    );
+}
+
+/// AC-3: Checkpoint record TTLs are also bumped on subject-view reads.
+#[test]
+fn test_get_checkpoints_for_subject_bumps_record_ttls() {
+    let (env, admin, client) = setup();
+    let subject = Address::generate(&env);
+    let token = Address::generate(&env);
+    let meta = Symbol::new(&env, "rec_ttl");
+
+    let id1 = client.create_checkpoint(&admin, &subject, &token, &10i128, &meta);
+    let id2 = client.create_checkpoint(&admin, &subject, &token, &20i128, &meta);
+
+    // Drive TTL below threshold.
+    let seq = env.ledger().sequence();
+    env.as_contract(&client.address, || {
+        env.storage()
+            .instance()
+            .extend_ttl(BUMP_AMOUNT, BUMP_AMOUNT);
+    });
+    env.ledger()
+        .set_sequence_number(seq + BUMP_AMOUNT - LIFETIME_THRESHOLD + 1);
+
+    let _ = client.get_checkpoints_for_subject(&subject, &0u32, &10u32);
+
+    for id in [id1, id2] {
+        let key = StorageKey::Checkpoint(id);
+        let ttl = env.as_contract(&client.address, || {
+            env.storage().persistent().get_ttl(&key)
+        });
+        assert_eq!(
+            ttl, BUMP_AMOUNT,
+            "buffer #26: get_checkpoints_for_subject must bump checkpoint {} TTL",
+            id
+        );
+    }
+}
+
+/// AC-4: Page size is capped at MAX_PAGE_SIZE.
+#[test]
+fn test_get_checkpoints_for_subject_caps_at_max_page_size() {
+    let (env, admin, client) = setup();
+    let subject = Address::generate(&env);
+    let token = Address::generate(&env);
+    let meta = Symbol::new(&env, "cap");
+
+    // Create MAX_PAGE_SIZE + 20 checkpoints for the subject.
+    let total = MAX_PAGE_SIZE as u64 + 20;
+    for i in 1..=total {
+        client.create_checkpoint(&admin, &subject, &token, &(i as i128), &meta);
+    }
+
+    // Requesting more than MAX_PAGE_SIZE should return exactly MAX_PAGE_SIZE.
+    let results = client.get_checkpoints_for_subject(&subject, &0u32, &(MAX_PAGE_SIZE + 50));
+    assert_eq!(
+        results.len(),
+        MAX_PAGE_SIZE,
+        "result must be capped at MAX_PAGE_SIZE ({})",
+        MAX_PAGE_SIZE
+    );
+}
+
+/// AC-4: Pagination — start offset advances through the subject's index.
+#[test]
+fn test_get_checkpoints_for_subject_pagination() {
+    let (env, admin, client) = setup();
+    let subject = Address::generate(&env);
+    let token = Address::generate(&env);
+    let meta = Symbol::new(&env, "paging");
+
+    // Create 15 checkpoints for this subject only.
+    for i in 1..=15u64 {
+        client.create_checkpoint(&admin, &subject, &token, &((i * 10) as i128), &meta);
+    }
+
+    // Page 1: offset 0, limit 5 → IDs 1-5
+    let page1 = client.get_checkpoints_for_subject(&subject, &0u32, &5u32);
+    assert_eq!(page1.len(), 5);
+    assert_eq!(page1.get(0).unwrap().id, 1);
+    assert_eq!(page1.get(4).unwrap().id, 5);
+
+    // Page 2: offset 5, limit 5 → IDs 6-10
+    let page2 = client.get_checkpoints_for_subject(&subject, &5u32, &5u32);
+    assert_eq!(page2.len(), 5);
+    assert_eq!(page2.get(0).unwrap().id, 6);
+    assert_eq!(page2.get(4).unwrap().id, 10);
+
+    // Page 3: offset 10, limit 5 → IDs 11-15
+    let page3 = client.get_checkpoints_for_subject(&subject, &10u32, &5u32);
+    assert_eq!(page3.len(), 5);
+    assert_eq!(page3.get(0).unwrap().id, 11);
+    assert_eq!(page3.get(4).unwrap().id, 15);
+
+    // Page 4: offset 15, limit 5 → empty (past the end)
+    let page4 = client.get_checkpoints_for_subject(&subject, &15u32, &5u32);
+    assert!(page4.is_empty(), "expected empty page past end");
+}
+
+/// AC-5: Unknown subject returns empty vec — not an error.
+#[test]
+fn test_get_checkpoints_for_subject_unknown_subject_returns_empty() {
+    let (env, admin, client) = setup();
+    let subject = Address::generate(&env);
+    let unknown = Address::generate(&env);
+    let token = Address::generate(&env);
+    let meta = Symbol::new(&env, "unk");
+
+    // Create a checkpoint for a different subject so the contract has some data.
+    client.create_checkpoint(&admin, &subject, &token, &100i128, &meta);
+
+    let result = client.try_get_checkpoints_for_subject(&unknown, &0u32, &10u32);
+    assert!(result.is_ok(), "unknown subject must return Ok, not an error");
+    let records = result.unwrap();
+    assert!(
+        records.is_empty(),
+        "unknown subject must return an empty vec"
+    );
+}
+
+/// AC-5: Before any checkpoints exist, every subject returns empty.
+#[test]
+fn test_get_checkpoints_for_subject_empty_contract_returns_empty() {
+    let (env, _admin, client) = setup();
+    let subject = Address::generate(&env);
+
+    let result = client.try_get_checkpoints_for_subject(&subject, &0u32, &10u32);
+    assert!(result.is_ok());
+    assert!(result.unwrap().is_empty());
+}
+
+/// AC-6: limit=0 returns InvalidPageSize error.
+#[test]
+fn test_get_checkpoints_for_subject_zero_limit_returns_error() {
+    let (env, admin, client) = setup();
+    let subject = Address::generate(&env);
+    let token = Address::generate(&env);
+    let meta = Symbol::new(&env, "zlimit");
+
+    client.create_checkpoint(&admin, &subject, &token, &100i128, &meta);
+
+    let result = client.try_get_checkpoints_for_subject(&subject, &0u32, &0u32);
+    assert!(
+        result.is_err(),
+        "limit=0 should return InvalidPageSize error"
+    );
+}
+
+/// Subjects share the global sequential ID space; each subject's index
+/// contains only its own IDs, not all IDs.
+#[test]
+fn test_get_checkpoints_for_subject_isolation_between_subjects() {
+    let (env, admin, client) = setup();
+    let subject_a = Address::generate(&env);
+    let subject_b = Address::generate(&env);
+    let token = Address::generate(&env);
+    let meta = Symbol::new(&env, "iso");
+
+    // 3 for A, 2 for B, interleaved.
+    let a1 = client.create_checkpoint(&admin, &subject_a, &token, &1i128, &meta);
+    let b1 = client.create_checkpoint(&admin, &subject_b, &token, &2i128, &meta);
+    let a2 = client.create_checkpoint(&admin, &subject_a, &token, &3i128, &meta);
+    let b2 = client.create_checkpoint(&admin, &subject_b, &token, &4i128, &meta);
+    let a3 = client.create_checkpoint(&admin, &subject_a, &token, &5i128, &meta);
+
+    let a_results = client.get_checkpoints_for_subject(&subject_a, &0u32, &10u32);
+    assert_eq!(a_results.len(), 3);
+    assert_eq!(a_results.get(0).unwrap().id, a1);
+    assert_eq!(a_results.get(1).unwrap().id, a2);
+    assert_eq!(a_results.get(2).unwrap().id, a3);
+
+    let b_results = client.get_checkpoints_for_subject(&subject_b, &0u32, &10u32);
+    assert_eq!(b_results.len(), 2);
+    assert_eq!(b_results.get(0).unwrap().id, b1);
+    assert_eq!(b_results.get(1).unwrap().id, b2);
+
+    // Records returned for A must all have subject == subject_a.
+    for i in 0..a_results.len() {
+        assert_eq!(a_results.get(i).unwrap().subject, subject_a);
+    }
+    // Records returned for B must all have subject == subject_b.
+    for i in 0..b_results.len() {
+        assert_eq!(b_results.get(i).unwrap().subject, subject_b);
+    }
+}
+
+/// start offset equal to total — returns empty (boundary condition).
+#[test]
+fn test_get_checkpoints_for_subject_start_at_exact_length() {
+    let (env, admin, client) = setup();
+    let subject = Address::generate(&env);
+    let token = Address::generate(&env);
+    let meta = Symbol::new(&env, "boundary");
+
+    for _ in 0..3 {
+        client.create_checkpoint(&admin, &subject, &token, &100i128, &meta);
+    }
+
+    // The subject has 3 entries (indices 0, 1, 2). start=3 is past the end.
+    let result = client.get_checkpoints_for_subject(&subject, &3u32, &10u32);
+    assert!(result.is_empty(), "start == total must return empty");
+}
+
+/// A single subject with MAX_PAGE_SIZE checkpoints can page through all
+/// of them in two calls without overlap or gap.
+#[test]
+fn test_get_checkpoints_for_subject_full_pagination_no_gaps() {
+    let (env, admin, client) = setup();
+    let subject = Address::generate(&env);
+    let token = Address::generate(&env);
+    let meta = Symbol::new(&env, "fullpage");
+
+    let total = MAX_PAGE_SIZE as u64 * 2;
+    for i in 1..=total {
+        client.create_checkpoint(&admin, &subject, &token, &(i as i128), &meta);
+    }
+
+    let page1 = client.get_checkpoints_for_subject(&subject, &0u32, &MAX_PAGE_SIZE);
+    let page2 =
+        client.get_checkpoints_for_subject(&subject, &MAX_PAGE_SIZE, &MAX_PAGE_SIZE);
+
+    assert_eq!(page1.len(), MAX_PAGE_SIZE);
+    assert_eq!(page2.len(), MAX_PAGE_SIZE);
+
+    // No overlap: last ID on page1 < first ID on page2.
+    let last_page1 = page1.get(page1.len() - 1).unwrap().id;
+    let first_page2 = page2.get(0).unwrap().id;
+    assert!(
+        last_page1 < first_page2,
+        "pages must not overlap: last={} first_next={}",
+        last_page1,
+        first_page2
+    );
+}

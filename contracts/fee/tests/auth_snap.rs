@@ -2,7 +2,7 @@
 
 extern crate std;
 
-use callora_fee::{FeeContract, FeeContractClient, FeeConfig};
+use callora_fee::{FeeConfig, FeeContract, FeeContractClient};
 use soroban_sdk::testutils::Address as _;
 use soroban_sdk::{Address, Env};
 
@@ -73,7 +73,13 @@ fn get_fee_config_does_not_require_auth() {
 
     env.set_auths(&[]);
     let config = client.get_fee_config();
-    assert_eq!(config, FeeConfig { fee_bps: 0, max_fee_bps: 10_000 });
+    assert_eq!(
+        config,
+        FeeConfig {
+            fee_bps: 0,
+            max_fee_bps: 10_000
+        }
+    );
 }
 
 #[test]

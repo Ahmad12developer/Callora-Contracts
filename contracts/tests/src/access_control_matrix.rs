@@ -742,7 +742,7 @@ mod settlement_access_control {
     }
 
     // -----------------------------------------------------------------------
-    // accept_vault — pending vault or admin
+    // accept_vault — pending vault only (#1141: admin cannot self-accept)
     // -----------------------------------------------------------------------
 
     #[test]
@@ -757,14 +757,14 @@ mod settlement_access_control {
     }
 
     #[test]
-    fn accept_vault_admin_succeeds() {
+    fn accept_vault_admin_rejected() {
         let env = Env::default();
         env.mock_all_auths();
         let ctx = setup(&env);
         let new_vault = Address::generate(&ctx.env);
         ctx.settlement.propose_vault(&ctx.admin, &new_vault);
         let result = ctx.settlement.try_accept_vault(&ctx.admin);
-        assert!(result.is_ok());
+        assert!(result.is_err(), "admin must not be able to accept a vault rotation (#1141)");
     }
 
     #[test]

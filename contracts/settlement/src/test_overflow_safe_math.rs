@@ -171,6 +171,7 @@ fn receive_payment_pool_overflow_is_caught() {
     let (env, contract_id, _admin, vault) = setup();
     let client = CalloraSettlementClient::new(&env, &contract_id);
     let token = Address::generate(&env);
+    client.add_supported_token(&_admin, &token);
 
     // Seed pool balance to i128::MAX - 1.
     poke_global_pool_balance(&env, &contract_id, i128::MAX - 1);
@@ -189,6 +190,7 @@ fn receive_payment_pool_credit_is_correct() {
     let (env, contract_id, _admin, vault) = setup();
     let client = CalloraSettlementClient::new(&env, &contract_id);
     let token = Address::generate(&env);
+    client.add_supported_token(&_admin, &token);
 
     client.receive_payment(&vault, &1_000i128, &true, &None, &token, &1u32);
 
@@ -208,6 +210,7 @@ fn receive_payment_developer_overflow_is_caught() {
     let client = CalloraSettlementClient::new(&env, &contract_id);
     let token = Address::generate(&env);
     let developer = Address::generate(&env);
+    client.add_supported_token(&_admin, &token);
 
     // Seed near-max developer balance.
     poke_dev_balance(&env, &contract_id, &developer, &token, i128::MAX - 1);
@@ -220,13 +223,13 @@ fn receive_payment_developer_overflow_is_caught() {
     );
 }
 
-/// Normal developer credit via `receive_payment` produces the correct balance.
 #[test]
 fn receive_payment_developer_credit_accumulates_correctly() {
     let (env, contract_id, _admin, vault) = setup();
     let client = CalloraSettlementClient::new(&env, &contract_id);
     let token = Address::generate(&env);
     let developer = Address::generate(&env);
+    client.add_supported_token(&_admin, &token);
 
     client.receive_payment(
         &vault,
@@ -238,7 +241,6 @@ fn receive_payment_developer_credit_accumulates_correctly() {
     );
     assert_eq!(client.get_developer_balance(&developer, &token), 3_000i128);
 
-    // Second credit accumulates.
     client.receive_payment(
         &vault,
         &1_500i128,
@@ -254,14 +256,13 @@ fn receive_payment_developer_credit_accumulates_correctly() {
 // 4. batch_receive_payment — DeveloperOverflow in a batch item
 // ---------------------------------------------------------------------------
 
-/// `batch_receive_payment` must fail if any item would overflow the target
-/// developer balance.
 #[test]
 fn batch_receive_payment_developer_overflow_is_caught() {
     let (env, contract_id, _admin, vault) = setup();
     let client = CalloraSettlementClient::new(&env, &contract_id);
     let token = Address::generate(&env);
     let developer = Address::generate(&env);
+    client.add_supported_token(&_admin, &token);
 
     // Seed near-max balance for the developer.
     poke_dev_balance(&env, &contract_id, &developer, &token, i128::MAX - 1);
@@ -276,7 +277,6 @@ fn batch_receive_payment_developer_overflow_is_caught() {
     );
 }
 
-/// Normal batch credits accumulate correctly across multiple developers.
 #[test]
 fn batch_receive_payment_accumulates_balances_correctly() {
     let (env, contract_id, _admin, vault) = setup();
@@ -284,6 +284,7 @@ fn batch_receive_payment_accumulates_balances_correctly() {
     let token = Address::generate(&env);
     let dev_a = Address::generate(&env);
     let dev_b = Address::generate(&env);
+    client.add_supported_token(&_admin, &token);
 
     let mut items: Vec<(Address, i128)> = Vec::new(&env);
     items.push_back((dev_a.clone(), 500i128));

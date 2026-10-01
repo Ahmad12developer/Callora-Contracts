@@ -17,6 +17,7 @@ use soroban_sdk::contracterror;
 /// | 7    | Overflow            | Arithmetic overflow detected                                 |
 /// | 8    | AlreadyPaused       | Contract is already paused; `pause` is a no-op               |
 /// | 9    | NotPaused           | Contract is not paused; `unpause` is a no-op                 |
+/// | 10   | SameSigner          | `rotate_signer` called with the current signer               |
 #[contracterror]
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[repr(u32)]
@@ -39,4 +40,6 @@ pub enum HotError {
     AlreadyPaused = 8,
     /// Contract is not currently paused; `unpause` is redundant (code 9).
     NotPaused = 9,
+    /// `rotate_signer` was called with the current signer (code 10).
+    SameSigner = 10,
 }

@@ -2,7 +2,7 @@
 
 This document is the **canonical, machine-readable catalog** of every event
 topic emitted by the Callora smart contracts (`vault`, `settlement`,
-`revenue_pool`). It is designed for indexer integrators who need to filter,
+`revenue_pool`, `distribute`). It is designed for indexer integrators who need to filter,
 subscribe to, or decode Soroban events by topic.
 
 > **Determinism guarantee.** Every topic string listed below is produced by a
@@ -77,7 +77,7 @@ Source: [`contracts/vault/src/events.rs`](../contracts/vault/src/events.rs)
 | 15 | `distribute`              | `event_distribute`             | Admin distributes funds                       |
 | 16 | `set_revenue_pool`        | `event_set_revenue_pool`       | Owner configures revenue pool address         |
 | 17 | `clear_revenue_pool`      | `event_clear_revenue_pool`     | Owner clears revenue pool address             |
-| 18 | `set_settlement`          | `event_set_settlement`         | Admin sets settlement contract address        |
+| 18 | `set_settlement`          | `event_set_settlement`         | Admin sets settlement contract address; data: `(old: Option<Address>, new: Address)` |
 | 19 | `metadata_set`            | `event_metadata_set`           | Offering metadata stored                      |
 | 20 | `price_set`               | `event_price_set`              | Offering price set                            |
 | 21 | `price_removed`           | `event_price_removed`          | Offering price removed                        |
@@ -106,8 +106,9 @@ Source: [`contracts/vault/src/events.rs`](../contracts/vault/src/events.rs)
 | 44 | `sweep_executed`          | `event_sweep_executed`         | Admin executes a pending sweep                |
 | 45 | `sweep_cancelled`         | `event_sweep_cancelled`        | Admin cancels a pending sweep                 |
 | 46 | `tl_window_changed`       | `event_timelock_window_changed`| Admin updates timelock window                 |
+| 47 | `allowlist_remove`        | `event_allowlist_remove`       | Single address removed from deposit allowlist |
 
-**Total: 46 topics**
+**Total: 47 topics**
 
 ---
 
@@ -135,8 +136,13 @@ Source: [`contracts/settlement/src/events.rs`](../contracts/settlement/src/event
 | 16 | `admin_migration_proposed`   | `event_admin_migration_proposed`   | Developer balance migration proposed           |
 | 17 | `admin_migration`            | `event_admin_migration`            | Developer balance migration executed           |
 | 18 | `developer_min_balance_changed` | `event_developer_min_balance_changed` | Developer minimum balance threshold set  |
+| 19 | `price_set`                  | `event_price_set`                  | Offering price created or changed          |
+| 20 | `price_removed`              | `event_price_removed`              | Offering price removed                     |
+| 21 | `supported_token_added` | `event_supported_token_added` | Admin enables a settlement payment token |
+| 22 | `supported_token_removed` | `event_supported_token_removed` | Admin disables future payments in a token |
+| 23 | `deduction_recorded`         | `event_deduction_recorded`         | Vault accounting deduction recorded            |
 
-**Total: 18 topics**
+**Total: 23 topics**
 
 ---
 
@@ -147,7 +153,7 @@ Source: [`contracts/revenue_pool/src/events.rs`](../contracts/revenue_pool/src/e
 | #  | Topic String                    | Constructor                           | Trigger                                      |
 |----|---------------------------------|---------------------------------------|----------------------------------------------|
 | 1  | `init`                          | `event_init`                          | Revenue pool initialization                  |
-| 2  | `admin_changed`                 | `event_admin_changed`                 | Admin change recorded (pre-transfer)         |
+| 2  | `admin_changed`                 | `event_admin_changed`                 | Pending admin accepts; records old and new   |
 | 3  | `admin_transfer_started`        | `event_admin_transfer_started`        | Admin nominates successor                    |
 | 4  | `admin_transfer_completed`      | `event_admin_transfer_completed`      | Pending admin accepts role                   |
 | 5  | `admin_cancelled`               | `event_admin_cancelled`               | Admin cancels pending transfer               |
@@ -175,6 +181,33 @@ Source: [`contracts/revenue_pool/src/events.rs`](../contracts/revenue_pool/src/e
 
 ---
 
+## Distribute Contract (`callora-distribute`)
+
+Source: [`contracts/distribute/src/events.rs`](../contracts/distribute/src/events.rs)
+
+| #  | Topic String                    | Constructor                           | Trigger                                      |
+|----|---------------------------------|---------------------------------------|----------------------------------------------|
+| 1  | `init`                          | `event_init`                          | Distribute initialization                    |
+| 2  | `admin_changed`                 | `event_admin_changed`                 | Pending admin accepts; records old and new   |
+| 3  | `admin_transfer_started`        | `event_admin_transfer_started`        | Admin nominates successor                    |
+| 4  | `admin_transfer_completed`      | `event_admin_transfer_completed`      | Pending admin accepts role                   |
+| 5  | `admin_cancelled`               | `event_admin_cancelled`               | Admin cancels pending transfer               |
+| 6  | `pause_set`                     | `event_pause_set`                     | Contract pause state toggled                 |
+| 7  | `set_max_distribute`            | `event_set_max_distribute`            | Per-leg distribution cap updated             |
+| 8  | `distribute`                    | `event_distribute`                    | USDC distributed to a recipient (single/leg) |
+| 9  | `distribute_started`            | `event_distribute_started`            | Distribution transfer is starting            |
+| 10 | `distribute_completed`          | `event_distribute_completed`          | Distribution transfer completed              |
+| 11 | `upgraded`                      | `event_upgraded`                      | Contract upgraded to new WASM                |
+| 12 | `batch_distribute_started`      | `event_batch_distribute_started`      | Batch distribution starting with total/count |
+| 13 | `batch_distribute_completed`    | `event_batch_distribute_completed`    | Batch distribution completed with total/count|
+| 14 | `batch_distribute`              | `event_batch_distribute`              | Batch distribute alias topic                 |
+| 15 | `batch_leg`                     | `event_batch_leg`                     | Batch payout leg alias topic                 |
+| 16 | `callora_v1`                    | `event_version_v1`                    | Version marker topic at topic[1]             |
+
+**Total: 16 topics**
+
+---
+
 ## Indexer Quick-Reference
 
 Subscribe by contract address + topic[0]:
@@ -183,6 +216,7 @@ Subscribe by contract address + topic[0]:
 Vault:        GCONTRACT_VAULT...
 Settlement:   GCONTRACT_SETTLEMENT...
 RevenuePool:  GCONTRACT_REVENUE_POOL...
+Distribute:   GCONTRACT_DISTRIBUTE...
 ```
 
 ### Topic[0] Filter Patterns
@@ -193,7 +227,7 @@ RevenuePool:  GCONTRACT_REVENUE_POOL...
 `set_authorized_caller`, `set_max_deduct`, `set_revenue_pool`,
 `clear_revenue_pool`, `set_settlement`, `metadata_set`, `metadata_updated`,
 `metadata_removed`, `price_set`, `price_removed`, `allowlist_add`,
-`allowlist_clear`, `revenue_pool_proposed`, `revenue_pool_accepted`,
+`allowlist_remove`, `allowlist_clear`, `revenue_pool_proposed`, `revenue_pool_accepted`,
 `revenue_pool_cancelled`, `request_id_pruned`, `reserve_cap_set`,
 `rescue_funds`, `swept`, `pause_proposed`, `pause_executed`,
 `pause_cancelled`, `upgrade_proposed`, `upgrade_executed`,
@@ -204,21 +238,28 @@ RevenuePool:  GCONTRACT_REVENUE_POOL...
 `payment_received`, `balance_credited`, `developer_withdraw`,
 `daily_withdraw_cap_changed`, `claim_window_changed`, `vault_proposed`,
 `vault_accepted`, `developer_force_credited`, `admin_migration_proposed`,
-`admin_migration`, `developer_min_balance_changed`, `initialized`
+`admin_migration`, `developer_min_balance_changed`, `initialized`, `deduction_recorded`
 
-**Revenue Pool-specific** (not shared with other contracts):
-`admin_changed`, `admin_transfer_started`, `admin_transfer_completed`,
-`pause_guardian_set`, `pause_guardian_cleared`, `pause_set`,
-`emergency_pause_set`,
-`receive_payment`, `yield_deposited`, `treasury_transfer_started`,
-`treasury_transfer_completed`, `treasury_cancelled`, `set_max_distribute`,
-`batch_distribute`, `distribute_started`, `distribute_completed`,
+**Revenue Pool-only** (not emitted by any other contract):
+`pause_guardian_set`, `pause_guardian_cleared`,
+`emergency_pause_set`, `receive_payment`, `yield_deposited`,
+`treasury_transfer_started`, `treasury_transfer_completed`,
+`treasury_cancelled`, `batch_distribute`,
 `emergency_drain_proposed`, `emergency_drain_executed`,
 `emergency_drain_cancelled`
 
+**Revenue Pool + Distribute** (disambiguate by contract address):
+`admin_changed`, `admin_transfer_started`, `admin_transfer_completed`,
+`pause_set`, `set_max_distribute`, `distribute_started`,
+`distribute_completed`
+
+**Distribute-specific** (not shared with other contracts):
+`batch_distribute_started`, `batch_distribute_completed`, `batch_leg`
+
 **Shared across contracts** (disambiguate by contract address):
 `init`, `upgraded`, `admin_nominated`, `admin_accepted`, `admin_cancelled`,
-`admin_broadcast`, `distribute`
+`admin_broadcast`, `distribute`, `distribute_started`, `distribute_completed`,
+`batch_distribute`, `pause_set`, `set_max_distribute`, `callora_v1`
 
 ---
 
@@ -226,16 +267,19 @@ RevenuePool:  GCONTRACT_REVENUE_POOL...
 
 | Contract      | Topics | Unique (not shared) | Shared |
 |---------------|--------|---------------------|--------|
-| vault         | 36     | 27                  | 9      |
-| settlement    | 18     | 12                  | 6      |
-| revenue_pool  | 23     | 17                  | 6      |
-| **Total**     | **77** | **56**              | **21** |
+| vault         | 47     | 39                  | 8      |
+| settlement    | 19     | 13                  | 6      |
+| revenue_pool  | 24     | 12                  | 12     |
+| distribute    | 16     | 3                   | 13     |
+| **Total**     | **106**| **67**              | **39** |
 
 > Shared count: each unique topic string that appears in more than one
 > contract is counted once per contract it appears in. The shared topic
-> strings across all contracts include: `init`/`initialized`, `upgraded`,
-> `admin_nominated`, `admin_accepted`, `admin_cancelled`, `admin_broadcast`,
-> `distribute`, and `deposit` (vault + settlement).
+> strings are: `admin_accepted`, `admin_broadcast`, `admin_cancelled`,
+> `admin_changed`, `admin_nominated`, `admin_transfer_completed`,
+> `admin_transfer_started`, `deposit`, `distribute`, `distribute_completed`,
+> `distribute_started`, `init`, `pause_set`, `set_max_distribute`, and
+> `upgraded`.
 
 ---
 

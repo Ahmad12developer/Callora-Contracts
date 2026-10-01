@@ -6,7 +6,7 @@ extern crate std;
 
 use crate::*;
 use soroban_sdk::testutils::{Address as _, Events as _};
-use soroban_sdk::{token, Address, Env, IntoVal, Symbol, TryFromVal};
+use soroban_sdk::{token, Address, Env, IntoVal, Symbol, TryFromVal, Val};
 
 #[test]
 fn all_event_constructors_return_correct_symbols() {
@@ -223,4 +223,197 @@ fn pause_guardian_events_validation() {
     assert_eq!(caller, admin);
     let guardian_data: Address = set_event.2.into_val(&env);
     assert_eq!(guardian_data, guardian);
+}
+
+// ---------------------------------------------------------------------------
+// Two-step admin rotation events (Issue #1163)
+//
+// `set_admin` nominates a successor; it must not announce an admin change
+// that has not happened yet. `admin_changed` is published only when the
+// nominee accepts, and a cancelled transfer must leave no change event behind.
+// ---------------------------------------------------------------------------
+
+/// One recorded event: `(contract, topics, data)`.
+type RecordedEvent = (Address, soroban_sdk::Vec<Val>, Val);
+
+/// Drop the events recorded so far, so the next [`recorded_events`] call only
+/// contains the events published by the action under test.
+fn drain_events(env: &Env) {
+    env.events().all();
+}
+
+/// The events published since the last [`drain_events`] call.
+fn recorded_events(env: &Env) -> std::vec::Vec<RecordedEvent> {
+    env.events().all().iter().collect()
+}
+
+/// Count the events in `events` whose topic 0 matches `name`.
+fn count_topic(env: &Env, events: &[RecordedEvent], name: &str) -> usize {
+    let expected = Symbol::new(env, name);
+    events
+        .iter()
+        .filter(|event| {
+            event
+                .1
+                .get(0)
+                .and_then(|value| Symbol::try_from_val(env, &value).ok())
+                .map(|topic| topic == expected)
+                .unwrap_or(false)
+        })
+        .count()
+}
+
+#[test]
+fn set_admin_nomination_emits_events_without_admin_changed() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let new_admin = Address::generate(&env);
+    let usdc_addr = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+    let pool_addr = env.register(RevenuePool, ());
+    let client = RevenuePoolClient::new(&env, &pool_addr);
+
+    client.init(&admin, &usdc_addr);
+
+    drain_events(&env);
+    client.set_admin(&admin, &new_admin);
+    let emitted = recorded_events(&env);
+
+    assert_eq!(
+        emitted.len(),
+        1,
+        "nomination must publish exactly one event, got {}",
+        emitted.len()
+    );
+
+    let event = &emitted[0];
+    let topic0: Symbol = event.1.get(0).unwrap().into_val(&env);
+    assert_eq!(topic0, Symbol::new(&env, "admin_transfer_started"));
+
+    let topic1: Address = event.1.get(1).unwrap().into_val(&env);
+    assert_eq!(topic1, admin, "nominator must be topic 1");
+
+    let pending: Address = event.2.into_val(&env);
+    assert_eq!(pending, new_admin, "nominee must be the event data");
+
+    assert_eq!(
+        count_topic(&env, &emitted, "admin_changed"),
+        0,
+        "set_admin must not announce an admin change before acceptance"
+    );
+}
+
+#[test]
+fn accept_admin_emits_events_recording_the_final_admin_change() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let new_admin = Address::generate(&env);
+    let usdc_addr = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+    let pool_addr = env.register(RevenuePool, ());
+    let client = RevenuePoolClient::new(&env, &pool_addr);
+
+    client.init(&admin, &usdc_addr);
+    drain_events(&env);
+    client.set_admin(&admin, &new_admin);
+    drain_events(&env);
+
+    client.claim_admin(&new_admin);
+    let emitted = recorded_events(&env);
+
+    assert_eq!(
+        emitted.len(),
+        2,
+        "acceptance must publish admin_changed then admin_transfer_completed, got {}",
+        emitted.len()
+    );
+
+    // 1. admin_changed — the actual change, recorded when it happens.
+    let changed = &emitted[0];
+    let changed_topic0: Symbol = changed.1.get(0).unwrap().into_val(&env);
+    assert_eq!(changed_topic0, Symbol::new(&env, "admin_changed"));
+
+    let changed_topic1: Address = changed.1.get(1).unwrap().into_val(&env);
+    assert_eq!(
+        changed_topic1, admin,
+        "admin_changed topic 1 must be the outgoing admin"
+    );
+
+    let (previous, updated): (Address, Address) = changed.2.into_val(&env);
+    assert_eq!(
+        previous, admin,
+        "admin_changed data[0] must be the old admin"
+    );
+    assert_eq!(
+        updated, new_admin,
+        "admin_changed data[1] must be the new admin"
+    );
+
+    // 2. admin_transfer_completed — emitted last, after the slot is updated.
+    let completed = &emitted[1];
+    let completed_topic0: Symbol = completed.1.get(0).unwrap().into_val(&env);
+    assert_eq!(
+        completed_topic0,
+        Symbol::new(&env, "admin_transfer_completed")
+    );
+
+    let completed_topic1: Address = completed.1.get(1).unwrap().into_val(&env);
+    assert_eq!(completed_topic1, new_admin);
+
+    let _: () = completed.2.into_val(&env);
+
+    assert_eq!(
+        count_topic(&env, &emitted, "admin_changed"),
+        1,
+        "exactly one admin_changed event must be published for a completed transfer"
+    );
+}
+
+#[test]
+fn cancelled_admin_transfer_emits_events_without_admin_changed() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let new_admin = Address::generate(&env);
+    let usdc_addr = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+    let pool_addr = env.register(RevenuePool, ());
+    let client = RevenuePoolClient::new(&env, &pool_addr);
+
+    client.init(&admin, &usdc_addr);
+    drain_events(&env);
+    client.set_admin(&admin, &new_admin);
+    drain_events(&env);
+
+    client.cancel_admin_transfer(&admin);
+    let emitted = recorded_events(&env);
+
+    assert_eq!(
+        emitted.len(),
+        1,
+        "cancellation must publish exactly one event, got {}",
+        emitted.len()
+    );
+
+    let event = &emitted[0];
+    let topic0: Symbol = event.1.get(0).unwrap().into_val(&env);
+    assert_eq!(topic0, Symbol::new(&env, "admin_cancelled"));
+
+    let topic1: Address = event.1.get(1).unwrap().into_val(&env);
+    assert_eq!(topic1, admin);
+    let topic2: Address = event.1.get(2).unwrap().into_val(&env);
+    assert_eq!(topic2, new_admin);
+    let _: () = event.2.into_val(&env);
+
+    assert_eq!(
+        count_topic(&env, &emitted, "admin_changed"),
+        0,
+        "a cancelled transfer must leave no admin_changed event behind"
+    );
+    assert_eq!(client.get_pending_admin(), None);
 }

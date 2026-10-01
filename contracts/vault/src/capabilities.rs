@@ -43,14 +43,12 @@ pub const CAP_PAUSE: u64 = 1 << 4;
 /// Introduced: v1.0.0
 pub const CAP_AUTHORIZED_CALLER: u64 = 1 << 5;
 
-/// Bit 6 — Offering metadata: per-offering metadata stored and queried on-chain.
-/// Managed via `set_metadata()`, `update_metadata()`, `remove_metadata()`.
-/// Introduced: v1.0.0
+/// Bit 6 — Reserved (formerly offering metadata; entrypoints not implemented).
+/// Position is permanently reserved and cleared (always 0) in `capabilities()`.
 pub const CAP_OFFERING_METADATA: u64 = 1 << 6;
 
-/// Bit 7 — Price registry: per-offering prices stored on-chain.
-/// Managed via `set_price()`, `get_price()`, `remove_price()`, `list_prices()`.
-/// Introduced: v1.0.0
+/// Bit 7 — Reserved (formerly price registry; entrypoints not implemented).
+/// Position is permanently reserved and cleared (always 0) in `capabilities()`.
 pub const CAP_PRICE_REGISTRY: u64 = 1 << 7;
 
 /// Bit 8 — Request idempotency: `deduct` and `batch_deduct` accept an optional
@@ -73,39 +71,37 @@ pub const CAP_TWO_STEP_ADMIN: u64 = 1 << 10;
 /// Introduced: v1.0.0
 pub const CAP_SETTLEMENT: u64 = 1 << 11;
 
-/// Bit 12 — Revenue pool: an optional revenue pool address is configurable via a
-/// two-step `propose_revenue_pool()` / `accept_revenue_pool()` pattern.
-/// Introduced: v1.0.0
+/// Bit 12 — Reserved (formerly revenue pool propose/accept; entrypoints not implemented).
+/// Position is permanently reserved and cleared (always 0) in `capabilities()`.
 pub const CAP_REVENUE_POOL: u64 = 1 << 12;
 
-/// Bit 13 — Developer rate limiting: per-developer token-bucket rate limits are
-/// enforced on deduct operations.  Configured via `set_developer_rate_limit()`.
-/// Introduced: v1.0.0
+/// Bit 13 — Reserved (formerly developer rate limiting; entrypoints not implemented).
+/// Position is permanently reserved and cleared (always 0) in `capabilities()`.
 pub const CAP_RATE_LIMIT: u64 = 1 << 13;
 
-/// Bit 14 — Admin broadcast: admin can emit signed on-chain messages with severity
-/// levels via `broadcast()`.
-/// Introduced: v1.0.0
+/// Bit 14 — Reserved (formerly admin broadcast; entrypoints not implemented).
+/// Position is permanently reserved and cleared (always 0) in `capabilities()`.
 pub const CAP_ADMIN_BROADCAST: u64 = 1 << 14;
 
 /// Bit 15 — Depositor allowlist: owner restricts deposits to approved addresses.
-/// Managed via `add_address()`, `set_allowed_depositor()`, `clear_all()`,
-/// `get_allowlist()`.
+/// Managed via `add_address()`, `clear_all()`, `get_allowlist()`, `is_authorized_depositor()`.
 /// Introduced: v1.0.0
 pub const CAP_DEPOSITOR_ALLOWLIST: u64 = 1 << 15;
 
-/// Bit 16 — Slippage guard: `deduct` enforces a caller-supplied `max_fee_bps` cap
-/// expressed as basis points of the current vault balance.
-/// Introduced: v1.0.0
+/// Bit 16 — Reserved (formerly slippage guard on deduct; entrypoints not implemented).
+/// Position is permanently reserved and cleared (always 0) in `capabilities()`.
 pub const CAP_SLIPPAGE_GUARD: u64 = 1 << 16;
 
-/// Bit 17 — Contract upgrade: admin can replace the WASM via `upgrade()`.
+/// Bit 17 — Contract upgrade: admin can replace the WASM via `propose_upgrade()` /
+/// `execute_upgrade()`.
 /// Introduced: v1.0.0
 pub const CAP_UPGRADE: u64 = 1 << 17;
 
-// Bits 18–63 are reserved for future capabilities and are always zero.
+// Bits 6, 7, 12, 13, 14, 16, and 18–63 are reserved and are always zero in capabilities().
 
 /// Bitmask of all capabilities exposed by this contract version.
+///
+/// Reserved bits (6, 7, 12, 13, 14, 16, and 18–63) are excluded and remain 0.
 ///
 /// Combine individual `CAP_*` constants with `&` to test for a specific feature:
 /// ```ignore
@@ -117,24 +113,18 @@ pub const ALL_CAPABILITIES: u64 = CAP_DEPOSIT
     | CAP_BATCH_DEDUCT
     | CAP_PAUSE
     | CAP_AUTHORIZED_CALLER
-    | CAP_OFFERING_METADATA
-    | CAP_PRICE_REGISTRY
     | CAP_REQUEST_IDEMPOTENCY
     | CAP_TWO_STEP_OWNERSHIP
     | CAP_TWO_STEP_ADMIN
     | CAP_SETTLEMENT
-    | CAP_REVENUE_POOL
-    | CAP_RATE_LIMIT
-    | CAP_ADMIN_BROADCAST
     | CAP_DEPOSITOR_ALLOWLIST
-    | CAP_SLIPPAGE_GUARD
     | CAP_UPGRADE;
 
 /// Return the capability bitmap for this contract.
 ///
 /// Each set bit signals a supported feature.  Bits are stable across upgrades —
 /// once assigned a bit position is never reused for a different feature.
-/// Reserved bits (18–63) are always zero.
+/// Reserved bits (6, 7, 12, 13, 14, 16, and 18–63) are always zero.
 ///
 /// No authentication is required; this is a pure view function.
 pub fn capabilities(_env: &Env) -> u64 {

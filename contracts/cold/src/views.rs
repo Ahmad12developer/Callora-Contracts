@@ -12,58 +12,51 @@
 //! let removed = before & !after;
 //! ```
 //!
-//! # Mapping to vault cold storage
-//! These bits describe features implemented by
-//! `contracts/vault/src/cold_storage.rs` (hot/cold split, auto-rebalance,
-//! N-of-M cold sweep). Reserved bits (7–63) are always zero.
+//! # Cold-storage status
+//!
+//! The vault does not currently expose the cold-storage entrypoints described
+//! by these historical bit identifiers. They remain exported so clients can
+//! continue to compile against the stable capability registry, but no cold
+//! capability is advertised until the vault implementation ships.
 
 use soroban_sdk::Env;
 
-/// Bit 0 — Hot/cold split: vault balance is partitioned into hot + cold pools
-/// with `hot + cold == tracked total`. Configured via cold-storage init.
-/// Introduced: v1.0.0
+/// Historical bit 0 — hot/cold split. Reserved until the vault exposes the
+/// corresponding entrypoints.
 pub const CAP_HOT_COLD_SPLIT: u64 = 1 << 0;
 
-/// Bit 1 — Auto-rebalance: deposits may move excess hot funds into cold when
-/// hot share drifts beyond `rebalance_threshold_bps` from `hot_bps`.
-/// Introduced: v1.0.0
+/// Historical bit 1 — automatic hot-to-cold rebalance. Reserved until the
+/// vault exposes the corresponding entrypoints.
 pub const CAP_AUTO_REBALANCE: u64 = 1 << 1;
 
-/// Bit 2 — Multisig cold sweep: moving funds out of cold requires N-of-M
-/// propose/approve (`propose_cold_sweep` / `approve_cold_sweep`).
-/// Introduced: v1.0.0
+/// Historical bit 2 — N-of-M cold sweep. Reserved until the vault exposes the
+/// corresponding entrypoints.
 pub const CAP_COLD_MULTISIG_SWEEP: u64 = 1 << 2;
 
-/// Bit 3 — Hot/cold ratio update: target `hot_bps` (and related threshold)
-/// can be updated without replacing the full signer set.
-/// Introduced: v1.0.0
+/// Historical bit 3 — hot/cold ratio update. Reserved until the vault exposes
+/// the corresponding entrypoints.
 pub const CAP_SET_HOT_COLD_RATIO: u64 = 1 << 3;
 
-/// Bit 4 — Cold signer set update: the N-of-M signer roster / threshold can
-/// be rotated independently of the hot/cold ratio.
-/// Introduced: v1.0.0
+/// Historical bit 4 — cold signer set update. Reserved until the vault exposes
+/// the corresponding entrypoints.
 pub const CAP_SET_COLD_SIGNERS: u64 = 1 << 4;
 
-/// Bit 5 — Cold balance view: clients can read the current `{hot, cold}`
-/// accounting split (and derive `total`).
-/// Introduced: v1.0.0
+/// Historical bit 5 — cold balance view. Reserved until the vault exposes the
+/// corresponding entrypoints.
 pub const CAP_COLD_BALANCE_VIEW: u64 = 1 << 5;
 
-/// Bit 6 — Pending cold-sweep view: clients can inspect an in-flight
-/// multisig sweep (`amount`, `destination`, `approvals`, `proposed_at`).
-/// Introduced: v1.0.0
+/// Historical bit 6 — pending cold-sweep view. Reserved until the vault
+/// exposes the corresponding entrypoints.
 pub const CAP_PENDING_COLD_SWEEP_VIEW: u64 = 1 << 6;
 
 // Bits 7–63 are reserved for future cold capabilities and are always zero.
 
-/// Bitmask of all cold capabilities exposed by this version.
-pub const ALL_CAPABILITIES: u64 = CAP_HOT_COLD_SPLIT
-    | CAP_AUTO_REBALANCE
-    | CAP_COLD_MULTISIG_SWEEP
-    | CAP_SET_HOT_COLD_RATIO
-    | CAP_SET_COLD_SIGNERS
-    | CAP_COLD_BALANCE_VIEW
-    | CAP_PENDING_COLD_SWEEP_VIEW;
+/// Bitmask of cold capabilities exposed by this version.
+///
+/// Cold storage is not exposed by the vault yet, so the advertised mask is
+/// intentionally empty. The historical bit constants above remain reserved
+/// and are not reused for another meaning.
+pub const ALL_CAPABILITIES: u64 = 0;
 
 /// Return the cold capability bitmap.
 ///

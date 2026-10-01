@@ -27,6 +27,14 @@ pub const PERSISTENT_BUMP_THRESHOLD: u32 = 50_000;
 /// Number of ledgers to extend persistent storage TTL by.
 pub const PERSISTENT_BUMP_AMOUNT: u32 = 50_000;
 
+/// Maximum number of request IDs retained in each requester's index.
+/// Older entries remain addressable through `get_refund_request`; the index is
+/// bounded so a single requester cannot grow one persistent value forever.
+pub const MAX_REQUESTER_REFUNDS: u32 = 100;
+
+/// Maximum page size for requester refund index reads.
+pub const MAX_REQUESTER_REFUNDS_PAGE_SIZE: u32 = 50;
+
 #[contract]
 pub struct RefundContract;
 
@@ -143,6 +151,23 @@ impl RefundContract {
         env.storage()
             .persistent()
             .extend_ttl(&key, PERSISTENT_BUMP_THRESHOLD, PERSISTENT_BUMP_AMOUNT);
+
+        let requester_key = StorageKey::RequesterRefunds(requester.clone());
+        let mut requester_refunds: soroban_sdk::Vec<u64> = env
+            .storage()
+            .persistent()
+            .get(&requester_key)
+            .unwrap_or_else(|| soroban_sdk::Vec::new(&env));
+        if requester_refunds.len() >= MAX_REQUESTER_REFUNDS {
+            requester_refunds.remove(0);
+        }
+        requester_refunds.push_back(request_id);
+        env.storage().persistent().set(&requester_key, &requester_refunds);
+        env.storage().persistent().extend_ttl(
+            &requester_key,
+            PERSISTENT_BUMP_THRESHOLD,
+            PERSISTENT_BUMP_AMOUNT,
+        );
 
         env.storage()
             .instance()
@@ -439,6 +464,55 @@ impl RefundContract {
             .instance()
             .get(&StorageKey::RefundCounter)
             .unwrap_or(0))
+    }
+
+    /// Return a bounded page of this requester's refund IDs in creation order.
+    ///
+    /// `start` is a zero-based offset into the retained index. The index keeps
+    /// at most [`MAX_REQUESTER_REFUNDS`] recent IDs; older requests remain
+    /// available through [`Self::get_refund_request`]. Both the index and
+    /// returned request records receive TTL bumps.
+    pub fn get_refunds_by_requester(
+        env: Env,
+        requester: Address,
+        start: u32,
+        limit: u32,
+    ) -> Result<soroban_sdk::Vec<u64>, RefundError> {
+        Self::bump_instance_ttl(&env);
+        Self::ensure_initialized(&env)?;
+
+        let requester_key = StorageKey::RequesterRefunds(requester);
+        let index: soroban_sdk::Vec<u64> = env
+            .storage()
+            .persistent()
+            .get(&requester_key)
+            .unwrap_or_else(|| soroban_sdk::Vec::new(&env));
+        if env.storage().persistent().has(&requester_key) {
+            env.storage().persistent().extend_ttl(
+                &requester_key,
+                PERSISTENT_BUMP_THRESHOLD,
+                PERSISTENT_BUMP_AMOUNT,
+            );
+        }
+
+        let effective_limit = limit.min(MAX_REQUESTER_REFUNDS_PAGE_SIZE);
+        let mut page = soroban_sdk::Vec::new(&env);
+        let end = start
+            .saturating_add(effective_limit)
+            .min(index.len());
+        for offset in start..end {
+            let request_id = index.get(offset).unwrap();
+            let key = StorageKey::PendingRefund(request_id);
+            if env.storage().persistent().has(&key) {
+                env.storage().persistent().extend_ttl(
+                    &key,
+                    PERSISTENT_BUMP_THRESHOLD,
+                    PERSISTENT_BUMP_AMOUNT,
+                );
+                page.push_back(request_id);
+            }
+        }
+        Ok(page)
     }
 
     /// Internal helper to get admin without TTL bump (for internal use).

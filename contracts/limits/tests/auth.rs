@@ -86,10 +86,16 @@ fn mock_auth_captures_signer_in_daily_withdraw_cap() {
     let all_events = env.events().all();
     let cap_events: std::vec::Vec<_> = all_events
         .iter()
-        .filter(|(_, topics, _)| topic_symbol(&env, topics) == Symbol::new(&env, "daily_withdraw_cap_changed"))
+        .filter(|(_, topics, _)| {
+            topic_symbol(&env, topics) == Symbol::new(&env, "daily_withdraw_cap_changed")
+        })
         .collect();
 
-    assert_eq!(cap_events.len(), 1, "must emit exactly 1 daily_withdraw_cap_changed event");
+    assert_eq!(
+        cap_events.len(),
+        1,
+        "must emit exactly 1 daily_withdraw_cap_changed event"
+    );
 
     let (_emitter, topics, _data) = &cap_events[0];
     assert_eq!(
@@ -140,10 +146,16 @@ fn real_auth_captures_signer_in_daily_withdraw_cap() {
     let all_events = env.events().all();
     let cap_events: std::vec::Vec<_> = all_events
         .iter()
-        .filter(|(_, topics, _)| topic_symbol(&env, topics) == Symbol::new(&env, "daily_withdraw_cap_changed"))
+        .filter(|(_, topics, _)| {
+            topic_symbol(&env, topics) == Symbol::new(&env, "daily_withdraw_cap_changed")
+        })
         .collect();
 
-    assert_eq!(cap_events.len(), 1, "must emit daily_withdraw_cap_changed under real auth");
+    assert_eq!(
+        cap_events.len(),
+        1,
+        "must emit daily_withdraw_cap_changed under real auth"
+    );
 
     let (_emitter, topics, _data) = &cap_events[0];
     assert_eq!(
@@ -186,7 +198,11 @@ fn mock_auth_captures_signer_in_developer_min_balance() {
         })
         .collect();
 
-    assert_eq!(min_balance_events.len(), 1, "must emit exactly 1 developer_min_balance_changed event");
+    assert_eq!(
+        min_balance_events.len(),
+        1,
+        "must emit exactly 1 developer_min_balance_changed event"
+    );
 
     let (_emitter, topics, _data) = &min_balance_events[0];
     assert_eq!(
@@ -216,10 +232,7 @@ fn auth_failure_on_limits_emits_no_event() {
 
     // Intruder tries to set daily withdraw cap.
     let result = client.try_set_daily_withdraw_cap(&intruder, &developer, &5_000);
-    assert!(
-        result.is_err(),
-        "intruder must be rejected"
-    );
+    assert!(result.is_err(), "intruder must be rejected");
 
     // No events should have been emitted by the failed call.
     let events_after = env.events().all();
@@ -265,10 +278,16 @@ fn mock_auth_captures_signer_in_set_max_distribute() {
     let all_events = env.events().all();
     let max_dist_events: std::vec::Vec<_> = all_events
         .iter()
-        .filter(|(_, topics, _)| topic_symbol(&env, topics) == Symbol::new(&env, "set_max_distribute"))
+        .filter(|(_, topics, _)| {
+            topic_symbol(&env, topics) == Symbol::new(&env, "set_max_distribute")
+        })
         .collect();
 
-    assert_eq!(max_dist_events.len(), 1, "must emit exactly 1 set_max_distribute event");
+    assert_eq!(
+        max_dist_events.len(),
+        1,
+        "must emit exactly 1 set_max_distribute event"
+    );
 
     let (_emitter, topics, _data) = &max_dist_events[0];
     assert_eq!(
@@ -318,10 +337,16 @@ fn real_auth_captures_signer_in_set_max_distribute() {
     let all_events = env.events().all();
     let max_dist_events: std::vec::Vec<_> = all_events
         .iter()
-        .filter(|(_, topics, _)| topic_symbol(&env, topics) == Symbol::new(&env, "set_max_distribute"))
+        .filter(|(_, topics, _)| {
+            topic_symbol(&env, topics) == Symbol::new(&env, "set_max_distribute")
+        })
         .collect();
 
-    assert_eq!(max_dist_events.len(), 1, "must emit set_max_distribute under real auth");
+    assert_eq!(
+        max_dist_events.len(),
+        1,
+        "must emit set_max_distribute under real auth"
+    );
 
     let (_emitter, topics, _data) = &max_dist_events[0];
     assert_eq!(

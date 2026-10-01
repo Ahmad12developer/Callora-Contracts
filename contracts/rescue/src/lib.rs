@@ -150,9 +150,7 @@ impl CalloraRescue {
             .instance()
             .get(&DataKey::TotalRescued)
             .unwrap_or(0_i128);
-        let next = prev
-            .checked_add(amount)
-            .ok_or(RescueError::Overflow)?;
+        let next = prev.checked_add(amount).ok_or(RescueError::Overflow)?;
         env.storage().instance().set(&DataKey::TotalRescued, &next);
 
         let payload = events::RescueEvent::new(
@@ -215,9 +213,7 @@ impl CalloraRescue {
             .instance()
             .get(&DataKey::TotalRescued)
             .unwrap_or(0_i128);
-        let next = prev
-            .checked_add(amount)
-            .ok_or(RescueError::Overflow)?;
+        let next = prev.checked_add(amount).ok_or(RescueError::Overflow)?;
         env.storage().instance().set(&DataKey::TotalRescued, &next);
 
         let payload = events::RescueEvent::new(
@@ -473,7 +469,12 @@ mod test_events {
 
     /// Helper: register a Stellar Asset Contract token, mint `amount` to the
     /// rescue contract, and return the token address.
-    fn create_token(env: &Env, admin: &Address, rescue_addr: &Address, mint_amount: i128) -> Address {
+    fn create_token(
+        env: &Env,
+        admin: &Address,
+        rescue_addr: &Address,
+        mint_amount: i128,
+    ) -> Address {
         let token_addr = env
             .register_stellar_asset_contract_v2(admin.clone())
             .address();
@@ -541,7 +542,11 @@ mod test_events {
                 t0 == Symbol::new(&env, "initialized")
             })
             .collect();
-        assert_eq!(init_events.len(), 0, "double init must not emit 'initialized'");
+        assert_eq!(
+            init_events.len(),
+            0,
+            "double init must not emit 'initialized'"
+        );
     }
 
     /// `rescue` emits exactly one `rescue` event with correct topics and
@@ -710,7 +715,11 @@ mod test_events {
                 t0 == Symbol::new(&env, "rescue")
             })
             .collect();
-        assert_eq!(rescue_events.len(), 0, "failed rescue must not emit 'rescue'");
+        assert_eq!(
+            rescue_events.len(),
+            0,
+            "failed rescue must not emit 'rescue'"
+        );
     }
 
     /// Failed `rescue_capped` (amount exceeds cap) must NOT emit an event.
@@ -745,6 +754,10 @@ mod test_events {
                 t0 == Symbol::new(&env, "rescue_capped")
             })
             .collect();
-        assert_eq!(capped_events.len(), 0, "failed rescue_capped must not emit 'rescue_capped'");
+        assert_eq!(
+            capped_events.len(),
+            0,
+            "failed rescue_capped must not emit 'rescue_capped'"
+        );
     }
 }

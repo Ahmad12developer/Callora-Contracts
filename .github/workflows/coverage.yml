@@ -13,21 +13,18 @@ jobs:
   coverage:
     name: "Cargo Test Coverage (≥ 95 %)"
     runs-on: ubuntu-latest
-    continue-on-error: true
 
     steps:
       # -----------------------------------------------------------------------
       # 1. Source
       # -----------------------------------------------------------------------
       - name: Checkout repository
-        continue-on-error: true
         uses: actions/checkout@v4
 
       # -----------------------------------------------------------------------
       # 2. Rust toolchain — stable is sufficient for Soroban unit tests
       # -----------------------------------------------------------------------
       - name: Install Rust stable toolchain
-        continue-on-error: true
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
@@ -36,7 +33,6 @@ jobs:
       # 3. Cache — speeds up subsequent runs considerably
       # -----------------------------------------------------------------------
       - name: Cache Cargo registry and build artefacts
-        continue-on-error: true
         uses: actions/cache@v4
         with:
           path: |
@@ -54,13 +50,11 @@ jobs:
       #    `cargo install` because it downloads a pre-built binary.
       # -----------------------------------------------------------------------
       - name: Install cargo-tarpaulin
-        continue-on-error: true
         uses: taiki-e/install-action@v2
         with:
           tool: cargo-tarpaulin
 
       - name: Build settlement WASM for tests
-        continue-on-error: true
         run: cargo build --package callora-settlement --target wasm32-unknown-unknown --release
 
       # -----------------------------------------------------------------------
@@ -70,7 +64,6 @@ jobs:
       #    this deliberately fails the workflow.
       # -----------------------------------------------------------------------
       - name: Run test coverage
-        continue-on-error: true
         run: cargo tarpaulin --config tarpaulin.toml
 
       # -----------------------------------------------------------------------
@@ -78,7 +71,6 @@ jobs:
       #    Always runs so the report is available even when coverage fails.
       # -----------------------------------------------------------------------
       - name: Upload coverage report artefact
-        continue-on-error: true
         if: always()
         uses: actions/upload-artifact@v4
         with:

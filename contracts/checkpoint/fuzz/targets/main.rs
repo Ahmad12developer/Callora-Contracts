@@ -206,10 +206,10 @@ fuzz_target!(|data: &[u8]| {
 
                 // Generate batch size testing boundaries: 0, 1..=50, and oversized > 50
                 let raw_size = match flag % 5 {
-                    0 => 0,                            // empty batch
-                    1 => 1,                            // single item batch
-                    2 => (operand_u32 % 49) + 1,       // valid batch size [1..50]
-                    3 => MAX_BATCH_SIZE,               // exact boundary (50)
+                    0 => 0,                                      // empty batch
+                    1 => 1,                                      // single item batch
+                    2 => (operand_u32 % 49) + 1,                 // valid batch size [1..50]
+                    3 => MAX_BATCH_SIZE,                         // exact boundary (50)
                     _ => MAX_BATCH_SIZE + (flag as u32 % 5) + 1, // oversized batch (> 50)
                 };
 
@@ -236,7 +236,10 @@ fuzz_target!(|data: &[u8]| {
 
                 if is_success(&result) {
                     let ids = result.unwrap().unwrap();
-                    assert_eq!(caller, admin, "non-admin successfully batch-created checkpoints");
+                    assert_eq!(
+                        caller, admin,
+                        "non-admin successfully batch-created checkpoints"
+                    );
                     assert!(raw_size > 0 && raw_size <= MAX_BATCH_SIZE);
                     assert!(!force_negative, "batch with negative balance succeeded");
                     assert_eq!(ids.len(), raw_size);
@@ -285,7 +288,10 @@ fuzz_target!(|data: &[u8]| {
 
                 let latest = client.get_latest_checkpoint();
                 if count_before == 0 {
-                    assert!(latest.is_none(), "latest checkpoint returned on empty storage");
+                    assert!(
+                        latest.is_none(),
+                        "latest checkpoint returned on empty storage"
+                    );
                 } else {
                     assert!(latest.is_some(), "latest checkpoint missing when count > 0");
                     assert_eq!(latest.unwrap().id, count_before);
@@ -305,11 +311,11 @@ fuzz_target!(|data: &[u8]| {
                 };
 
                 let limit: u32 = match flag % 5 {
-                    0 => 0,                            // invalid page size
-                    1 => 1,                            // single item page
-                    2 => 50,                           // standard page
-                    3 => MAX_PAGE_SIZE,                // max limit (100)
-                    _ => MAX_PAGE_SIZE + 50,           // oversized limit (> 100)
+                    0 => 0,                  // invalid page size
+                    1 => 1,                  // single item page
+                    2 => 50,                 // standard page
+                    3 => MAX_PAGE_SIZE,      // max limit (100)
+                    _ => MAX_PAGE_SIZE + 50, // oversized limit (> 100)
                 };
 
                 let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -324,7 +330,10 @@ fuzz_target!(|data: &[u8]| {
                 } else if is_success(&result) {
                     let records = result.unwrap().unwrap();
                     if start_id > count_before {
-                        assert!(records.is_empty(), "out-of-bounds start_id returned records");
+                        assert!(
+                            records.is_empty(),
+                            "out-of-bounds start_id returned records"
+                        );
                     } else {
                         let expected_max_len = limit.min(MAX_PAGE_SIZE) as u64;
                         let available = if start_id == 0 {
@@ -400,7 +409,9 @@ fuzz_target!(|data: &[u8]| {
                     1 => {
                         // accept_admin
                         let caller = if flag % 2 == 0 {
-                            pending_admin_opt.clone().unwrap_or_else(|| non_admin.clone())
+                            pending_admin_opt
+                                .clone()
+                                .unwrap_or_else(|| non_admin.clone())
                         } else {
                             non_admin.clone()
                         };
@@ -481,7 +492,10 @@ fuzz_target!(|data: &[u8]| {
                 assert_eq!(current_admin, admin, "view method mutated admin");
                 assert_eq!(count, count_before, "view method mutated count");
                 assert_eq!(latest_id, count_before, "view method mutated latest_id");
-                assert_eq!(pending, pending_admin_opt, "view method mutated pending admin");
+                assert_eq!(
+                    pending, pending_admin_opt,
+                    "view method mutated pending admin"
+                );
             }
 
             // -----------------------------------------------------------
@@ -505,7 +519,9 @@ fuzz_target!(|data: &[u8]| {
             // -----------------------------------------------------------
             9 => {
                 for record in created_records.iter() {
-                    let fetched = client.get_checkpoint(&record.id).expect("existing record vanished");
+                    let fetched = client
+                        .get_checkpoint(&record.id)
+                        .expect("existing record vanished");
                     assert_eq!(fetched, *record, "checkpoint record content mutated!");
                 }
             }

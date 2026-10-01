@@ -23,7 +23,8 @@
 
 extern crate std;
 
-use callora_upgrade::admin::{self, UpgradeError, DEFAULT_COOLDOWN_SECONDS};
+use callora_upgrade::admin::{self, DEFAULT_COOLDOWN_SECONDS, MIN_COOLDOWN_SECONDS};
+use callora_upgrade::errors::UpgradeError;
 use soroban_sdk::testutils::{Address as _, Ledger as _};
 use soroban_sdk::{contract, contractimpl, Address, Env, Symbol};
 
@@ -38,9 +39,14 @@ pub struct UpgradeHarness;
 
 #[contractimpl]
 impl UpgradeHarness {
+    /// Delegate `init_admin` to the admin module.
+    pub fn init_admin(env: Env, admin: Address) -> Result<(), UpgradeError> {
+        admin::init_admin(&env, &admin)
+    }
+
     /// Delegate `set_cooldown` to the admin module.
-    pub fn set_cooldown(env: Env, caller: Address, cooldown: u64) {
-        admin::set_cooldown(&env, &caller, cooldown);
+    pub fn set_cooldown(env: Env, caller: Address, cooldown: u64) -> Result<(), UpgradeError> {
+        admin::set_cooldown(&env, &caller, cooldown)
     }
 
     /// Delegate `get_cooldown` to the admin module.
@@ -287,17 +293,20 @@ fn test_xcontract_callee_panic_rolls_back() {
 fn test_xcontract_set_cooldown_survives_xcontract_call() {
     let ctx = setup();
 
+    // set_cooldown is admin-only, so install the admin first.
+    ctx.upgrade_client.init_admin(&ctx.admin);
+
     ctx.caller_client
-        .call_set_cooldown(&ctx.upgrade_id, &ctx.admin, &60);
+        .call_set_cooldown(&ctx.upgrade_id, &ctx.admin, &MIN_COOLDOWN_SECONDS);
 
     assert_eq!(
         ctx.caller_client.call_get_cooldown(&ctx.upgrade_id),
-        60,
+        MIN_COOLDOWN_SECONDS,
         "cooldown set via cross-contract must be visible through caller proxy"
     );
     assert_eq!(
         ctx.upgrade_client.get_cooldown(),
-        60,
+        MIN_COOLDOWN_SECONDS,
         "cooldown set via cross-contract must be visible through direct client"
     );
 }

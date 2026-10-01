@@ -52,10 +52,43 @@
 //! ([`YieldLimitError::Overflow`] / [`YieldLimitError::CounterUnderflow`]) so
 //! production code paths never invoke `unwrap()`.
 
+use callora_storage_migration::StorageMigrationValidator;
 use soroban_sdk::{contract, contractimpl, contracttype, Address, BytesN, Env};
 
 use crate::errors::YieldLimitError;
 use crate::events;
+
+// ---------------------------------------------------------------------
+// Constants — storage-layout versioning
+// ---------------------------------------------------------------------
+
+/// Storage-layout version recorded by [`StorageMigrationValidator`] for this
+/// contract. Bumped whenever the on-ledger schema changes so the pre-upgrade
+/// validation gate can enforce ordered, single-step migrations.
+const STORAGE_MIGRATION_VERSION: u32 = 1;
+
+/// Human-readable descriptor of the on-ledger storage layout.
+///
+/// The descriptor is hashed by [`storage_layout_hash`] and recorded at `init`
+/// time and on every upgrade. Any change to the shape of [`AccountLimits`],
+/// [`AccountState`], or the [`StorageKey`] enum MUST be reflected here so the
+/// [`StorageMigrationValidator`] can detect an accidental silent layout change
+/// (`StorageMigrationError::SilentLayoutChange`).
+const STORAGE_LAYOUT_DESCRIPTOR: &str = concat!(
+    "callora-yield-limits:v1:",
+    "StorageKey[Admin,PendingAdmin,DefaultLimits,AccountLimits,AccountState,WasmVersion];",
+    "AccountLimits[max_bets:u32,max_positions:u32,max_subscriptions:u32];",
+    "AccountState[bets:u32,positions:u32,subscriptions:u32]"
+);
+
+/// Deterministic SHA-256 hash of the current on-ledger storage layout.
+///
+/// This is the "real layout hash" passed to [`StorageMigrationValidator`] on
+/// both the pre-upgrade validation and the post-validation finalize call, so a
+/// same-version re-deploy cannot silently change the layout.
+pub fn storage_layout_hash(env: &Env) -> BytesN<32> {
+    callora_storage_migration::layout_hash(env, STORAGE_LAYOUT_DESCRIPTOR)
+}
 
 // ---------------------------------------------------------------------
 // Constants — TTL and defaults
@@ -130,6 +163,13 @@ pub enum StorageKey {
     AccountLimits(Address),
     /// Per-account live counters (persistent storage).
     AccountState(Address),
+    /// Hash of the most recently installed WASM (`BytesN<32>`, instance
+    /// storage).
+    ///
+    /// Deliberately named `WasmVersion` (rather than `Version`) to avoid
+    /// colliding with the `StorageKey::Version` marker written by
+    /// [`StorageMigrationValidator`] in the same instance-storage namespace.
+    WasmVersion,
 }
 
 // ---------------------------------------------------------------------
@@ -378,15 +418,17 @@ pub fn clear_account_limits(env: &Env, account: &Address) {
 /// caller has no recorded state yet. Bumps persistent TTL on read.
 pub fn read_account_state(env: &Env, account: &Address) -> AccountState {
     let key = StorageKey::AccountState(account.clone());
-    let state = env
-        .storage()
-        .persistent()
-        .get::<_, AccountState>(&key)
-        .unwrap_or_else(AccountState::zero);
-    env.storage()
-        .persistent()
-        .extend_ttl(&key, STATE_BUMP_THRESHOLD, STATE_BUMP_AMOUNT);
-    state
+    match env.storage().persistent().get::<_, AccountState>(&key) {
+        Some(state) => {
+            env.storage()
+                .persistent()
+                .extend_ttl(&key, STATE_BUMP_THRESHOLD, STATE_BUMP_AMOUNT);
+            state
+        }
+        // No recorded state yet: a zero struct is the correct default, and
+        // there is no entry whose TTL could (or should) be extended.
+        None => AccountState::zero(),
+    }
 }
 
 /// Persist the live per-account counters and bump persistent TTL.
@@ -458,6 +500,17 @@ impl CalloraYieldLimits {
         env.storage()
             .instance()
             .extend_ttl(INSTANCE_BUMP_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+
+        // Record the deployed storage-layout version + hash so the upgrade
+        // path can enforce ordered, single-step migrations against a known
+        // schema from the very first deployment.
+        StorageMigrationValidator::record_deployed_schema(
+            &env,
+            STORAGE_MIGRATION_VERSION,
+            &storage_layout_hash(&env),
+        )
+        .map_err(|_| YieldLimitError::UpgradeRejected)?;
+
         env.events().publish((events::event_init(&env), admin), ());
         Ok(())
     }
@@ -742,17 +795,68 @@ impl CalloraYieldLimits {
     // Upgrade
     // -----------------------------------------------------------------
 
-    /// Replace the WASM and persist the new hash (admin only).
+    /// Replace the WASM, run the storage-migration guard, and persist the new
+    /// hash under [`StorageKey::WasmVersion`] (admin only).
+    ///
+    /// The guard runs in the *current* (old) code, before
+    /// `update_current_contract_wasm`, and never mutates business state. It
+    /// rejects an all-zero WASM hash, enforces ordered single-step migrations,
+    /// and detects a silent layout change to [`AccountLimits`]/[`AccountState`].
+    ///
+    /// # Errors
+    /// - [`YieldLimitError::Unauthorized`] — caller is not the current admin.
+    /// - [`YieldLimitError::NotInitialized`] — `init` has not been called.
+    /// - [`YieldLimitError::UpgradeRejected`] — the migration validator
+    ///   rejected the upgrade (all-zero hash, version skip, rollback without a
+    ///   backup, or a silent storage-layout change).
     pub fn upgrade(
         env: Env,
         caller: Address,
         new_wasm_hash: BytesN<32>,
     ) -> Result<(), YieldLimitError> {
         require_admin(&env, &caller)?;
+
+        // ── Pre-upgrade storage-migration validation ──────────────────────
+        let layout_hash = storage_layout_hash(&env);
+        StorageMigrationValidator::validate_before_upgrade(
+            &env,
+            STORAGE_MIGRATION_VERSION,
+            &layout_hash,
+            &callora_storage_migration::zero_layout_hash(&env),
+            &new_wasm_hash,
+            false,
+        )
+        .map_err(|_| YieldLimitError::UpgradeRejected)?;
+        StorageMigrationValidator::finalize_migration(
+            &env,
+            STORAGE_MIGRATION_VERSION,
+            &layout_hash,
+            &new_wasm_hash,
+        )
+        .map_err(|_| YieldLimitError::UpgradeRejected)?;
+
         env.deployer()
             .update_current_contract_wasm(new_wasm_hash.clone());
+        env.storage()
+            .instance()
+            .set(&StorageKey::WasmVersion, &new_wasm_hash);
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_BUMP_THRESHOLD, INSTANCE_BUMP_AMOUNT);
         env.events()
             .publish((events::event_upgraded(&env), caller), new_wasm_hash);
         Ok(())
+    }
+
+    /// Return the last upgraded WASM hash, or `None` if never upgraded.
+    ///
+    /// This is the on-chain source of truth for "which code is live" after an
+    /// upgrade, mirroring `get_version` on the revenue pool and checkpoint
+    /// contracts.
+    pub fn get_version(env: Env) -> Option<BytesN<32>> {
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_BUMP_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+        env.storage().instance().get(&StorageKey::WasmVersion)
     }
 }

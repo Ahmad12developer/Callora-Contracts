@@ -1622,3 +1622,52 @@ fn version_returns_semver_string() {
     let v = client.version();
     assert_eq!(v, String::from_str(&env, env!("CARGO_PKG_VERSION")));
 }
+
+// ---------------------------------------------------------------------------
+// get_ttl_policy
+// ---------------------------------------------------------------------------
+
+/// The TTL-policy view must report the bump/threshold constants only.
+///
+/// Regression guard for the former `get_storage_ttl` view: it returned a `ttl`
+/// field that was the live instance TTL under `cfg(test)` but the constant
+/// `BUMP_AMOUNT` in production builds, so an operator reading it could not tell
+/// a healthy entry from an archived one. Live TTLs are read over Soroban RPC
+/// `getLedgerEntries` instead (`docs/STORAGE_TTL_DOCTOR.md`); the contract now
+/// exposes policy constants only, and `TtlPolicy` has no `ttl` field.
+#[test]
+fn get_ttl_policy_does_not_report_storage_ttl() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let (_, client) = create_pool(&env);
+    let (usdc_address, _, _) = create_usdc(&env, &admin);
+
+    // The view is a pure policy read: it must answer before `init` too, i.e. it
+    // does not depend on — nor refresh — the instance entry's TTL.
+    let pre_init = client.get_ttl_policy();
+    assert_eq!(pre_init.len(), 1);
+    assert_eq!(pre_init.get(0).unwrap().threshold, LIFETIME_THRESHOLD);
+    assert_eq!(pre_init.get(0).unwrap().bump_amount, BUMP_AMOUNT);
+
+    client.init(&admin, &usdc_address);
+
+    let policy = client.get_ttl_policy();
+    assert_eq!(policy.len(), 1);
+
+    let instance = policy.get(0).unwrap();
+    assert_eq!(instance.category, String::from_str(&env, "Instance"));
+    assert_eq!(instance.key_desc, String::from_str(&env, "Instance"));
+    assert_eq!(instance.storage_type, String::from_str(&env, "Instance"));
+    assert_eq!(instance.threshold, LIFETIME_THRESHOLD);
+    assert_eq!(instance.bump_amount, BUMP_AMOUNT);
+
+    // Re-reading at a later ledger sequence returns the same constants, so
+    // nothing about the answer depends on (or reveals) live ledger TTL state.
+    let seq = env.ledger().sequence();
+    env.ledger().set_sequence_number(seq + 1_000);
+    let again = client.get_ttl_policy();
+    assert_eq!(again.len(), 1);
+    assert_eq!(again.get(0).unwrap().threshold, LIFETIME_THRESHOLD);
+    assert_eq!(again.get(0).unwrap().bump_amount, BUMP_AMOUNT);
+}

@@ -6,7 +6,8 @@
 //! - event emission: `cooldown_set`, `upgrade_started`, `upgrade_recorded`
 #![cfg(test)]
 extern crate std;
-use super::*;
+use crate::admin::{check_and_record_upgrade, get_cooldown, set_cooldown, DEFAULT_COOLDOWN_SECONDS};
+use crate::errors::UpgradeError;
 use soroban_sdk::{
     testutils::{Address as _, Events as _, Ledger as _},
     Address, Env, IntoVal, Symbol,

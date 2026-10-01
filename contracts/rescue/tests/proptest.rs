@@ -118,7 +118,12 @@ fn pick_op(rng: &mut Prng) -> Op {
 fn setup(
     env: &Env,
     initial_balance: i128,
-) -> (CalloraRescueClient<'_>, Address, token::Client<'_>, token::StellarAssetClient<'_>) {
+) -> (
+    CalloraRescueClient<'_>,
+    Address,
+    token::Client<'_>,
+    token::StellarAssetClient<'_>,
+) {
     env.mock_all_auths();
 
     let admin = Address::generate(env);
@@ -325,7 +330,8 @@ fn run_trace(seed: u64) {
                 env.set_auths(&[]); // clear all auths so imposter fails
 
                 let amount = rng.range_i128(1, MAX_RESCUE);
-                let result = client.try_rescue(&imposter, &token_client.address, &recovered, &amount);
+                let result =
+                    client.try_rescue(&imposter, &token_client.address, &recovered, &amount);
                 assert!(
                     result.is_err(),
                     "seed={seed} step={step}: rescue by imposter must fail"
@@ -337,7 +343,14 @@ fn run_trace(seed: u64) {
         }
 
         // **Invariant**: after every operation, state must be consistent.
-        assert_invariant(&client, &token_client, INITIAL_BALANCE, expected_total, seed, step);
+        assert_invariant(
+            &client,
+            &token_client,
+            INITIAL_BALANCE,
+            expected_total,
+            seed,
+            step,
+        );
 
         // **Monotonicity**: total_rescued must not have decreased.
         let total_after = client.total_rescued();
@@ -424,10 +437,7 @@ fn rejected_amount_not_positive_does_not_mutate_state() {
     let balance_before = token_client.balance(&contract_id);
 
     let result = client.try_rescue(&admin, &token_addr, &to, &0);
-    assert_eq!(
-        result.unwrap_err().unwrap(),
-        RescueError::AmountNotPositive
-    );
+    assert_eq!(result.unwrap_err().unwrap(), RescueError::AmountNotPositive);
 
     assert_eq!(
         client.total_rescued(),

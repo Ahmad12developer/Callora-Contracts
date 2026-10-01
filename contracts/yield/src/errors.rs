@@ -15,6 +15,7 @@
 //! | 7    | SubscriptionsAtCap    | Account's active subscription count is at the configured cap |
 //! | 8    | CounterUnderflow      | `clear_*` was called when the corresponding counter was zero  |
 //! | 9    | Overflow              | `checked_add` overflow detected on a counter increment        |
+//! | 10   | UpgradeRejected       | Storage-migration validator rejected the pending upgrade      |
 //!
 //! All variants implement [`Copy`] + [`PartialEq`] so they can be returned by
 //! value or pinned in arrays without allocation.
@@ -63,4 +64,10 @@ pub enum YieldLimitError {
     /// counter arithmetic saturates `u32::MAX` — surfaces a stable error
     /// rather than panicking so callers cannot rely on undefined behaviour.
     Overflow = 9,
+    /// The storage-migration validator rejected the pending upgrade (code 10).
+    ///
+    /// Returned by [`crate::limits::CalloraYieldLimits::upgrade`] when the
+    /// pre-upgrade guard rejects an all-zero WASM hash, a version skip, an
+    /// unsanctioned rollback, or a silent storage-layout change.
+    UpgradeRejected = 10,
 }
