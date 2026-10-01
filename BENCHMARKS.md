@@ -146,3 +146,50 @@ cargo bench -p callora-whitelist -- --baseline main
 
 `criterion = "0.5"` is a development-only dependency and does not affect the
 production contract WASM.
+
+# Gas Regression Baseline
+
+The repository maintains a measured CPU/memory baseline at
+`contracts/.gas-baseline.json`. Pull requests are gated on this baseline by the
+`gas-regression` job in the CI workflow (`.github/workflows/ci.yml`),
+which runs `scripts/gas-regression.sh` and fails when any entrypoint grows by
+more than 5% in CPU or memory unless the PR carries the `gas-override` label.
+
+## What the check does
+
+1. Builds the workspace and runs the gas measurement tests for `callora-vault`,
+`callora-allowlist`, `callora-limits`, and `callora-cold`.
+2. Compares each measured entrypoint against `contracts/.gas-baseline.json` using a
+5% threshold.
+3. Writes a markdown report to `target/gas-report.md` and uploads it as the
+`gas-report` artifact on every pull request run.
+
+## Refreshing the baseline
+
+When a regression is intentional (for example, a deliberate storage layout change):
+
+1. Run the measurements and write the new baseline:
+
+   ```bash
+   ./scripts/gas-regression.sh --update-baseline
+   ```
+
+2. Review the diff in `contracts/.gas-baseline.json` and commit it as part of the PR.
+3. Document the rationale in the PR description. Merging the refreshed baseline
+is equivalent to accepting the new cost profile.
+
+### Override label
+
+If a regression is known and accepted but the baseline has not yet been
+refreshed, add the `gas-override` label to the pull request. The workflow will
+still run and upload the report, but the gate will not fail. Remove the label
+and refresh the baseline as soon as possible to keep the gate meaningful.
+
+### Running locally
+
+```bash
+./scripts/gas-regression.sh
+```
+
+The script requires `jq`, `cargo`, and `python3`. Pass `--threshold <percent>`
+to override the default 5% threshold for a one-off investigation.

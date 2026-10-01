@@ -359,3 +359,32 @@ fn gas_snap_boundary_comparisons() {
     assert!(snap.cpu_exceeds(99), "one above cap must exceed");
     assert!(snap.mem_exceeds(199), "one above cap must exceed");
 }
+
+/// Snapshot `register_topic` with a description at the 256-byte maximum.
+///
+/// Validates that the worst-case input for description validation fits
+/// within a reasonable gas budget and that the call succeeds (i.e. a
+/// description of exactly 256 printable ASCII bytes is accepted).
+#[test]
+fn gas_snap_register_topic_max_description() {
+    extern crate std;
+    use std::string::String as StdString;
+
+    let f = setup();
+
+    // Build a 256-byte description consisting entirely of visible ASCII 'a'
+    // characters — the maximum length accepted by normalize_visible_ascii.
+    let max_desc_std: StdString = "a".repeat(256);
+    let desc = String::from_str(&f.env, max_desc_std.as_str());
+    let owner = Address::generate(&f.env);
+    let name = Symbol::new(&f.env, "max_desc");
+
+    measure_snap!(f.env, snap, {
+        f.client.register_topic(&f.admin, &name, &desc, &owner);
+    });
+
+    // Budget is set slightly above the short-description baseline to account
+    // for the extra work of copying and scanning 256 bytes.  A regression
+    // here means the description validation path became unexpectedly heavier.
+    assert_within_budget("register_topic_max_description", snap, 700_000, 14_000);
+}

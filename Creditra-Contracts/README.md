@@ -1,0 +1,371 @@
+# Creditra Contracts
+
+[![CI](https://github.com/Creditra/Creditra-Contracts/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Creditra/Creditra-Contracts/actions/workflows/ci.yml)
+
+**Decentralized, risk-priced credit on Stellar / Soroban — without
+overcollateralization.** Credit lines whose limit and interest rate evolve
+continuously from on-chain behavioral signals, financial attestations, and a
+formally specified risk-pricing function. Default events are settled through a
+separate auction contract using a one-shot, replay-protected cross-contract
+handoff.
+
+This is the **Creditra-Contracts** workspace: two Soroban WebAssembly contracts,
+about 14.5 KLOC of Rust, release WASM under a **50 KB hard CI budget**. Line
+coverage is **not** claimed as a number here: CI measures it on every run and
+fails the build below the enforced floor — see
+[`docs/COVERAGE.md`](./docs/COVERAGE.md) for the current floor and measured
+value.
+
+| Doc | What it answers |
+|---|---|
+| [`WHITEPAPER.md`](./WHITEPAPER.md) | Why and how — protocol-level model, math, comparison vs Aave/Compound/Maker |
+| [`docs/INDEX.md`](./docs/INDEX.md) | Audience-routed entry point (reviewer / auditor / integrator / operator / contributor) |
+| [`docs/PROTOCOL_SPEC.md`](./docs/PROTOCOL_SPEC.md) | Per-module contract surface: every entrypoint, every storage key, every error |
+| [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md) | System & sequence diagrams (mermaid); call topology |
+| [`docs/RISK_PRICING.md`](./docs/RISK_PRICING.md) | The risk-pricing algorithm in depth, with worked numerical examples |
+| [`docs/SECURITY.md`](./docs/SECURITY.md) | Threat model, auditor checklist, bug bounty scope |
+| [`docs/EXECUTION_QUALITY.md`](./docs/EXECUTION_QUALITY.md) | Test catalog, CI matrix, deployment checklists, PR cadence |
+| [`docs/GLOSSARY.md`](./docs/GLOSSARY.md) | Project terminology with source citations |
+
+---
+
+## The differentiator
+
+Aave / Compound / Maker require **150 %+ overcollateralization**, which gates
+the median wallet out of on-chain credit. Creditra computes a credit limit and
+an interest rate from a **deterministic on-chain function** of the borrower's
+behavioral history and risk score:
+
+$$
+r(k) = \mathrm{clamp}(b + k \cdot s, \; r_{\min}, \; \min(r_{\max}, 10\,000))
+$$
+
+— where $k$ is the risk score and $(b, s, r_{\min}, r_{\max})$ are the
+admin-set rate-formula parameters (`contracts/credit/src/risk.rs:77`). The
+contract supports an *optional* collateral floor (default 150 %) that an
+operator can dial between fully unsecured and Aave-style — but the eligibility
+predicate is **behavior**, not deposit.
+
+See [`WHITEPAPER.md`](./WHITEPAPER.md) for the full design.
+
+---
+
+## Architecture (at a glance)
+
+```mermaid
+flowchart LR
+    Borrower((Borrower)) -->|"draw / repay /<br/>self_suspend / close"| Credit
+    Admin((Admin / Multisig)) -->|"init, set_*, update_risk_parameters,<br/>default, settle, upgrade"| Credit
+    Scorer((Off-chain Scorer)) -.->|"risk_score"| Admin
+    Credit -->|"transfer / transfer_from"| Token[Liquidity Token SAC]
+    Credit -->|"reserve I/O"| Reserve[Liquidity Source]
+    Credit -->|"settle_default_liquidation<br/>(cross-contract)"| Auction
+    Auction -->|"highest_bid (i128)"| Credit
+    Credit -->|events| Indexer((Event Indexer))
+    Auction -->|events| Indexer
+```
+
+| Crate | Path | Role |
+|---|---|---|
+| `creditra-credit` | `contracts/credit/` | Credit-line core: open / draw / repay / risk update / default / settle / upgrade. `lib.rs` is 5 449 lines, 13 sub-modules. |
+| `creditra-risk` | `contracts/risk/` | Standalone risk admin cooldown contract: time-based circuit breaker for admin risk-mutation actions. |
+| `gateway-auction` | `gateway-contract/contracts/auction_contract/` | Minimal English & Dutch auction; one-shot settlement handoff back to credit. |
+
+Full module catalog and entrypoint signatures: [`docs/PROTOCOL_SPEC.md`](./docs/PROTOCOL_SPEC.md).
+Sequence diagrams for draw, repay, default → auction → settle:
+[`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md).
+
+---
+
+## Quick start
+
+### Prerequisites
+
+- Rust — the exact compiler is pinned in [`rust-toolchain.toml`](./rust-toolchain.toml);
+  any `rustup`-shipped `cargo` installs and uses it automatically. Floating
+  channels (`stable`/`beta`/`nightly`) are rejected by
+  `scripts/check-toolchain.sh` so builds stay reproducible across toolchain
+  versions.
+- `wasm32-unknown-unknown` target (declared in `rust-toolchain.toml`;
+  installed automatically with the toolchain):
+  ```bash
+  rustup target add wasm32-unknown-unknown
+  ```
+- [Stellar Soroban CLI](https://developers.stellar.org/docs/smart-contracts/getting-started/setup) for deploy/invoke.
+
+### Build
+
+```bash
+# Workspace build (no WASM)
+cargo build
+
+# Release WASM, size-optimized
+cargo build --release --target wasm32-unknown-unknown -p creditra-credit
+# Output: target/wasm32-unknown-unknown/release/creditra_credit.wasm (< 50 KB)
+```
+
+The release profile (`Cargo.toml`) is tuned for contract size:
+`opt-level = "z"`, `lto = true`, `strip = "symbols"`, `codegen-units = 1`,
+`panic = "abort"`, and — unusually — `overflow-checks = true` even in release,
+so the entire `i128` accounting layer reverts on overflow instead of wrapping.
+
+#### Reproducible builds
+
+Builds are reproducible across machines and over time because the whole
+workspace compiles with one pinned toolchain against pinned dependencies:
+
+- `rust-toolchain.toml` pins `channel` to an exact `X.Y.Z` compiler version;
+  `scripts/check-toolchain.sh` fails the build on any floating channel and
+  `--verify-active` fails when the active `rustc` differs from the pin.
+- All build/test entry points compile `--locked` against committed
+  `Cargo.lock` files, so dependency resolution cannot drift.
+- CI reads the same `rust-toolchain.toml` (no floating toolchain refs), so
+  local and CI artifacts come from identical inputs.
+
+### Test
+
+```bash
+cargo test --workspace
+```
+
+### Coverage
+
+Measured and enforced in CI by the `coverage` job in
+[`.github/workflows/ci.yml`](./.github/workflows/ci.yml), over
+`contracts/creditra-credit` — the crate that job actually builds and tests.
+The job fails below `MIN_LINE_COVERAGE`, publishes the HTML report as the
+`coverage-report` artifact, and writes the measured numbers to its job summary.
+
+```bash
+cargo install cargo-llvm-cov --version 0.9.1 --locked
+cd contracts/creditra-credit
+
+# Reproduce the CI gate
+cargo llvm-cov --all-targets --html --fail-under-lines 92
+```
+
+The floor, the measured value, and the reason the root Soroban workspace is not
+yet included are documented in [`docs/COVERAGE.md`](./docs/COVERAGE.md).
+
+### Deploy (testnet)
+
+```bash
+soroban contract deploy \
+  --wasm target/wasm32-unknown-unknown/release/creditra_credit.wasm \
+  --source <identity> --network testnet
+soroban contract invoke --id <addr> --source <identity> --network testnet -- init --admin <admin-addr>
+```
+
+Full testnet + mainnet checklists are in
+[`docs/EXECUTION_QUALITY.md`](./docs/EXECUTION_QUALITY.md) §6.
+
+---
+
+## Repo map (where to look)
+
+```
+Creditra-Contracts/
+├── WHITEPAPER.md              # Protocol-level design (this is the centerpiece)
+├── README.md                  # You are here
+├── Cargo.toml                 # Workspace + release profile
+├── contracts/credit/
+│   ├── Cargo.toml
+│   └── src/
+│       ├── lib.rs             # #[contract] Credit + all entrypoints (5449 LOC)
+│       ├── types.rs           # 38-variant ContractError, CreditStatus, configs
+│       ├── storage.rs         # 30-variant DataKey, TTL constants, helpers
+│       ├── auth.rs            # require_admin / require_admin_auth
+│       ├── config.rs          # init, set_liquidity_*
+│       ├── borrow.rs          # draw_status_error helper
+│       ├── collateral.rs      # deposit/withdraw + MinCollateralRatioBps
+│       ├── freeze.rs          # global draws-frozen toggle
+│       ├── lifecycle.rs       # state transitions + settle_default_liquidation
+│       ├── risk.rs            # compute_rate_from_score, update_risk_parameters
+│       ├── accrual.rs         # apply_accrual + grace/penalty branches
+│       ├── math_utils.rs      # mul_div, prorate_interest, Rounding
+│       ├── query.rs           # read-only helpers, is_delinquent
+│       └── events.rs          # 25+ #[contracttype] payload structs
+│   └── tests/                 # 42 integration test files
+├── contracts/risk/
+│   ├── Cargo.toml
+│   └── src/
+│       ├── lib.rs             # #[contract] RiskContract + entrypoints
+│       └── admin.rs           # cooldown storage helpers + guard
+├── gateway-contract/contracts/auction_contract/
+│   ├── tests/
+│   │   ├── transition_matrix.rs  # AuctionStatus transition matrix (Issue #614)
+│   │   └── auth_settle.rs       # settle_default_liquidation auth coverage
+│   └── src/
+│       ├── lib.rs             # Auction contract (English + Dutch modes)
+│       ├── types.rs           # AuctionMode, AuctionStatus, AuctionState
+│       ├── storage.rs         # DataKey + persistent AuctionKey, TTLs
+│       ├── events.rs          # BidRefundedEvent, AuctionClosedEvent, ...
+│       ├── errors.rs          # AuctionError (12 variants)
+│       └── test.rs            # 1 934 lines of tests
+├── docs/                      # Long-form references (state machine, errors,
+│                              # storage layout, threat model, accrual,
+│                              # rate formula, indexer integration, …)
+└── scripts/                   # Operator helpers (build, check, error introspection)
+```
+
+Per-entrypoint signatures, validation order, storage keys, and error returns:
+[`docs/PROTOCOL_SPEC.md`](./docs/PROTOCOL_SPEC.md).
+
+---
+
+## What's in the box
+
+### Credit contract entrypoints
+
+`Credit` (`#[contract]`, `#[contractimpl]` in `contracts/credit/src/lib.rs`):
+
+- **Init & admin rotation:** `init`, `propose_admin`, `accept_admin`,
+  `get_contract_version`.
+- **Credit-line CRUD:** `open_credit_line`, `draw_credit`, `repay_credit`,
+  `close_credit_line`, `suspend_credit_line`, `self_suspend_credit_line`,
+  `default_credit_line`, `reinstate_credit_line`, `forgive_debt`.
+- **Risk parameters:** `update_risk_parameters`, `set_rate_formula_config` /
+  `clear_rate_formula_config`, `set_rate_change_limits`,
+  `set_borrower_rate_floor`, `set_penalty_surcharge_bps`,
+  `set_grace_period_config`.
+- **Caps & limits:** `set_max_draw_amount`, `set_max_repay_amount`,
+  `set_draw_min_interval`, `set_utilization_cap`, `set_max_total_exposure`,
+  `set_credit_limit_bounds`.
+- **Liquidity & treasury:** `set_liquidity_token`, `set_liquidity_source`,
+  `set_protocol_fee_bps`, `set_treasury`, `withdraw_treasury`.
+- **Collateral (optional):** `deposit_collateral`, `withdraw_collateral`,
+  `partial_release_collateral` (borrower-callable; releases a portion of
+  collateral while keeping health-factor ≥ `MinCollateralRatioBps`).
+- **Repayment schedule:** `set_repayment_schedule`, `get_repayment_schedule`,
+  `is_delinquent`.
+- **Operational controls:** `pause_protocol` / `unpause_protocol`,
+  `freeze_draws` / `unfreeze_draws`, `block_borrower` / `unblock_borrower` /
+  `bulk_block_borrowers`, `accrue_batch`, `reverse_draw`.
+- **Auction & oracle:** `set_auction_contract`,
+  `settle_default_liquidation`, `set_oracle_config`.
+- **Upgrade:** `upgrade(new_wasm_hash)`.
+- **Queries:** 20+ read-only `get_*` / `enumerate_*` / `is_*` entrypoints.
+
+### Auction contract entrypoints
+
+`Auction` (`#[contract]`,
+`gateway-contract/contracts/auction_contract/src/lib.rs`):
+
+- `init_auction(auction_id, mode, start_time, end_time, min_bid, min_increment_bps, dutch_start_price, dutch_floor_price, dutch_decay, dutch_step_count)`
+- `set_factory_contract(factory)`
+- `place_bid(auction_id, bidder, amount)` — English ascending or Dutch
+  descending mode, with anti-grief minimum increment and reentrancy-guarded
+  refund of the prior bidder
+- `close_auction(auction_id)`
+- `settle_default_liquidation(auction_id, credit_contract, borrower) -> i128`
+  — factory-only, one-shot per `auction_id`
+- `claim_auction(auction_id)` — winner-only
+
+---
+
+## Status & roadmap
+
+### Shipped (current `main`)
+
+- Credit-line core with 38-variant `ContractError`, 30-variant `DataKey`,
+  25+ events; pinned by CI tests.
+- Risk-pricing formula (`compute_rate_from_score`), per-borrower floor,
+  rate-change cap, penalty surcharge, grace policy.
+- Lazy interest accrual with three branches (current, delinquent, grace).
+- English & Dutch auction modes; reentrancy-guarded refunds.
+- Cross-contract default-liquidation handoff with two-sided replay
+  protection.
+- Oracle deviation & staleness circuit breaker.
+- Admin-gated WASM upgrade with schema version bump.
+- Circuit breaker (`pause_protocol`) with repay-credit exception.
+- Treasury + protocol fee on interest portion.
+- Per-borrower utilization cap, per-borrower exposure cap, global exposure
+  cap, draw cooldown, per-tx caps.
+- Collateral as an *optional* (default-on) floor.
+- Borrower self-suspend.
+- Storage TTL hygiene with automatic bump on access.
+- 42 integration test files, ~817 `#[test]` annotations, line coverage measured
+  and floor-enforced in CI on every run.
+
+### Next milestones
+
+- **Anti-snipe extension** for English auctions (documented in PR #430, not
+  yet active in `place_bid`).
+- **Decentralized default-signal oracle** per `docs/default-oracle.md`
+  (signed attestation, signer set, nonce replay protection).
+- **Build-clean main** — resolve the merge-artifact duplicates in
+  `lifecycle.rs` and `risk.rs` that produce the current `cargo check`
+  errors (tracked in `IMPLEMENTATION_STATUS.md`).
+- **Property-fuzz harness** (`cargo fuzz`) over `apply_accrual` and
+  `compute_rate_from_score`.
+- **External audit** (see `AUDIT_SUMMARY.md`).
+- **Decentralized scorer pipeline** — move the off-chain scoring function
+  to a stake-weighted committee or zk-attested compute.
+
+---
+
+## Conventions
+
+- Edition: 2021. Toolchain: pinned exactly in `rust-toolchain.toml` — never
+  build with a floating channel; see `scripts/check-toolchain.sh`.
+- Style: `cargo fmt --check` enforced in CI; `cargo clippy -- -D warnings`
+  enforced in CI.
+- Errors: no production `unwrap()` / `expect()` (audited, PR #418 / #421).
+  Every fallible path returns a `ContractError`.
+- ABI stability: `ContractError` discriminants are pinned by
+  `tests/error_discriminants.rs`; event topics by
+  `tests/event_topic_stability.rs`.
+- Commit style: conventional commits (`docs:`, `feat:`, `fix:`, `security:`,
+  `chore:`, `test:`).
+- Branching: feature branches off `main`, PRs reviewed and merged via
+  GitHub.
+
+---
+
+## Helper scripts
+
+| Script | Use |
+|---|---|
+| `scripts/build_wasm.sh [all\|credit\|auction]` | Build release-mode WASM artifacts (toolchain-pin asserted, `--locked`) |
+| `scripts/check_workspace.sh [args]` | `cargo check --workspace --locked` wrapper |
+| `scripts/check-toolchain.sh [--verify-active]` | Enforce the reproducible-build policy (exact toolchain pin, committed locks, CI workflow consumes the pin) |
+| `scripts/clean_profraw.sh [--dry-run]` | Remove stray `*.profraw` coverage profiles outside `target/` |
+| `scripts/list_contract_errors.py [--json]` | Print every `ContractError` variant with its discriminant |
+
+See [`scripts/README.md`](scripts/README.md) for conventions.
+
+---
+
+## License
+
+See `Cargo.toml` for crate-level metadata. Both `creditra-credit` and
+`gateway-auction` carry an SPDX license identifier; SPDX headers are
+preserved by CI tests in `tests/spdx_header_preservation.rs` and
+`tests/spdx_preservation_standalone.rs`.
+
+---
+
+## Verifying the headline claims
+
+```bash
+# Workspace topology
+ls contracts/credit/tests/*.rs | wc -l                # 42 integration files
+grep -r '#\[test\]' contracts/ gateway-contract/ | wc -l   # ~817 tests
+git log --oneline | grep -c Merge                     # ~332 merged PRs
+
+# Coverage (the gate CI enforces, from the crate CI actually builds)
+cargo install cargo-llvm-cov --version 0.9.1 --locked
+(cd contracts/creditra-credit \
+  && cargo llvm-cov --all-targets --html --fail-under-lines 92)
+
+# Size budget
+cargo build --release --target wasm32-unknown-unknown -p creditra-credit \
+  && ls -l target/wasm32-unknown-unknown/release/creditra_credit.wasm   # < 50 KB
+
+# Error catalog
+python3 scripts/list_contract_errors.py --json | jq 'length'   # 38
+```
+
+---
+
+*For the long-form protocol description, start with [`WHITEPAPER.md`](./WHITEPAPER.md).*

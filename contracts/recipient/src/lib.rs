@@ -29,10 +29,13 @@ pub mod events;
 
 pub use errors::RecipientError;
 
-use soroban_sdk::{contract, contractimpl, contracttype, Address, Env, String};
+use soroban_sdk::{contract, contractimpl, contracttype, Address, Env, String, Vec};
 
 /// Maximum byte length of a recipient name.
 pub const MAX_NAME_LEN: u32 = 64;
+
+/// Maximum number of entries returned by a single [`CalloraRecipient::list_recipients`] call.
+pub const MAX_PAGE_SIZE: u32 = 50;
 
 // ---------------------------------------------------------------------------
 // Storage keys
@@ -44,10 +47,18 @@ pub const MAX_NAME_LEN: u32 = 64;
 pub enum StorageKey {
     /// Instance: the current admin [`Address`].
     Admin,
-    /// Instance: total number of registered recipients.
+    /// Instance: total number of registered recipients (also the logical
+    /// length of the name index).
     RecipientCount,
     /// Persistent: a registered recipient entry, keyed by name.
     Recipient(String),
+    /// Persistent: position-keyed name index entry. Forms a dense array
+    /// `0 .. RecipientCount` that enables enumeration via
+    /// [`CalloraRecipient::list_recipients`].
+    NameIndex(u32),
+    /// Persistent: reverse lookup — maps a recipient name to its current
+    /// position in the [`StorageKey::NameIndex`] array.
+    NamePosition(String),
 }
 
 // ---------------------------------------------------------------------------
@@ -183,6 +194,16 @@ impl CalloraRecipient {
             .instance()
             .get(&StorageKey::RecipientCount)
             .ok_or(RecipientError::NotInitialized)?;
+
+        // Append name to the position index.
+        let new_pos = count;
+        env.storage()
+            .persistent()
+            .set(&StorageKey::NameIndex(new_pos), &name);
+        env.storage()
+            .persistent()
+            .set(&StorageKey::NamePosition(name.clone()), &new_pos);
+
         env.storage().instance().set(
             &StorageKey::RecipientCount,
             &count.checked_add(1).ok_or(RecipientError::Overflow)?,
@@ -242,6 +263,11 @@ impl CalloraRecipient {
     /// The recipient must exist. The caller must be the admin and must
     /// authorize. The recipient count is decremented with overflow-safe math.
     ///
+    /// The name index is maintained with an O(1) swap-remove: the removed
+    /// entry's slot is filled with the last entry in the index, which is then
+    /// truncated. Enumeration order is therefore not guaranteed to be stable
+    /// across removals.
+    ///
     /// # Parameters
     /// * `caller` — Must be the current admin; must authorize.
     /// * `name` — Name of the recipient to remove.
@@ -271,10 +297,46 @@ impl CalloraRecipient {
             .instance()
             .get(&StorageKey::RecipientCount)
             .ok_or(RecipientError::NotInitialized)?;
-        env.storage().instance().set(
-            &StorageKey::RecipientCount,
-            &count.checked_sub(1).ok_or(RecipientError::Overflow)?,
-        );
+        let new_count = count.checked_sub(1).ok_or(RecipientError::Overflow)?;
+
+        // Swap-remove from the name index:
+        //   1. Look up the slot of the name being removed.
+        //   2. If it is not the last slot, move the last name into that slot
+        //      and update its reverse-lookup entry.
+        //   3. Remove the (now vacated) last slot and both reverse entries.
+        let removed_pos: u32 = env
+            .storage()
+            .persistent()
+            .get(&StorageKey::NamePosition(name.clone()))
+            .ok_or(RecipientError::NotFound)?;
+
+        if removed_pos < new_count {
+            // The name at the tail must fill the vacated slot.
+            let tail_name: String = env
+                .storage()
+                .persistent()
+                .get(&StorageKey::NameIndex(new_count))
+                .ok_or(RecipientError::NotFound)?;
+
+            env.storage()
+                .persistent()
+                .set(&StorageKey::NameIndex(removed_pos), &tail_name);
+            env.storage()
+                .persistent()
+                .set(&StorageKey::NamePosition(tail_name), &removed_pos);
+        }
+
+        // Truncate the tail slot and clean up the removed name's entries.
+        env.storage()
+            .persistent()
+            .remove(&StorageKey::NameIndex(new_count));
+        env.storage()
+            .persistent()
+            .remove(&StorageKey::NamePosition(name.clone()));
+
+        env.storage()
+            .instance()
+            .set(&StorageKey::RecipientCount, &new_count);
 
         env.events()
             .publish((events::event_recipient_removed(&env), name), ());
@@ -333,6 +395,69 @@ impl CalloraRecipient {
             .instance()
             .get(&StorageKey::RecipientCount)
             .ok_or(RecipientError::NotInitialized)?)
+    }
+
+    /// Return a page of registered recipient names.
+    ///
+    /// Names are returned in an unspecified but stable order within a single
+    /// page. Order may change when recipients are removed (swap-remove
+    /// semantics). Callers must paginate using `start` offsets to walk the
+    /// full set; combine with [`Self::get_recipient_count`] to determine the
+    /// total number of pages.
+    ///
+    /// # Parameters
+    /// * `start` — Zero-based index of the first entry to return.
+    /// * `limit` — Maximum number of entries to return, capped at
+    ///   [`MAX_PAGE_SIZE`]. Passing `0` returns up to [`MAX_PAGE_SIZE`]
+    ///   entries starting at `start`.
+    ///
+    /// # Returns
+    /// A [`Vec<String>`] containing at most `min(limit, MAX_PAGE_SIZE)` names.
+    /// Returns an empty vec when `start >= get_recipient_count()`.
+    ///
+    /// # Errors
+    /// * [`RecipientError::NotInitialized`] — contract was never initialized.
+    ///
+    /// Pure view: no auth, no storage writes.
+    pub fn list_recipients(
+        env: Env,
+        start: u32,
+        limit: u32,
+    ) -> Result<Vec<String>, RecipientError> {
+        if !env.storage().instance().has(&StorageKey::Admin) {
+            return Err(RecipientError::NotInitialized);
+        }
+
+        let count: u32 = env
+            .storage()
+            .instance()
+            .get(&StorageKey::RecipientCount)
+            .ok_or(RecipientError::NotInitialized)?;
+
+        // Cap the page size.
+        let effective_limit = if limit == 0 || limit > MAX_PAGE_SIZE {
+            MAX_PAGE_SIZE
+        } else {
+            limit
+        };
+
+        let mut result = Vec::new(&env);
+
+        if start >= count {
+            return Ok(result);
+        }
+
+        let end = (start + effective_limit).min(count);
+        for pos in start..end {
+            let name: String = env
+                .storage()
+                .persistent()
+                .get(&StorageKey::NameIndex(pos))
+                .ok_or(RecipientError::NotFound)?;
+            result.push_back(name);
+        }
+
+        Ok(result)
     }
 }
 

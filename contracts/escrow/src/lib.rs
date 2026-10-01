@@ -99,14 +99,19 @@ pub enum StorageKey {
     /// Instance: approval flag for an escrow payment asset (`bool`).
     /// Deny-by-default: absent means the asset is not approved.
     ApprovedAsset(Address),
-    /// Instance: escrow record keyed by `(payment_asset, recipient)`.
+    /// Persistent: escrow record keyed by `(payment_asset, recipient)`.
+    ///
+    /// Escrow records are stored in persistent storage (not instance) so that
+    /// the instance footprint stays independent of the number of escrows and
+    /// the instance cannot archive due to unbounded growth.
     Escrow(Address, Address),
 }
 
 /// A recorded escrow created under a specific approved payment asset.
 ///
-/// Stored in instance storage, keyed by `(payment_asset, recipient)`, so a
+/// Stored in persistent storage, keyed by `(payment_asset, recipient)`, so a
 /// repeated creation attempt with the same inputs is rejected as a replay.
+/// Reads and writes bump the persistent entry's TTL.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct EscrowRecord {
@@ -120,6 +125,15 @@ pub struct EscrowRecord {
     pub created_at: u64,
 }
 
+/// Number of ledgers to extend persistent escrow entries by on read/write.
+///
+/// ~30 days at 5s/ledger. Chosen to comfortably outlive typical escrow
+/// lifetimes while keeping rent costs bounded.
+pub const ESCROW_TTL_LEDGERS: u32 = 518_400;
+
+/// Number of ledgers to extend the instance TTL by on every entrypoint.
+pub const INSTANCE_TTL_LEDGERS: u32 = 518_400;
+
 // ---------------------------------------------------------------------------
 // Contract
 // ---------------------------------------------------------------------------
@@ -129,6 +143,17 @@ pub struct CalloraEscrow;
 
 #[contractimpl]
 impl CalloraEscrow {
+    /// Extend the instance storage TTL.
+    ///
+    /// Called at the top of every entrypoint so the instance (which holds
+    /// config, admin, signer, cooldown, and approved-asset flags) never
+    /// archives due to inactivity.
+    fn extend_instance_ttl(env: &Env) {
+        env.storage()
+            .instance()
+            .extend_ttl(INSTANCE_TTL_LEDGERS, INSTANCE_TTL_LEDGERS);
+    }
+
     // -----------------------------------------------------------------------
     // Initialisation
     // -----------------------------------------------------------------------
@@ -157,6 +182,7 @@ impl CalloraEscrow {
         cooldown_secs: Option<u64>,
     ) -> Result<(), EscrowError> {
         admin.require_auth();
+        Self::extend_instance_ttl(&env);
         if env.storage().instance().has(&StorageKey::Admin) {
             return Err(EscrowError::AlreadyInitialized);
         }
@@ -226,6 +252,7 @@ impl CalloraEscrow {
     /// # Errors
     /// * [`EscrowError::NotInitialized`] -- contract was never initialized.
     pub fn get_cooldown(env: Env) -> Result<u64, EscrowError> {
+        Self::extend_instance_ttl(&env);
         Self::admin(&env)?;
         Ok(admin::get_cooldown(&env))
     }
@@ -245,6 +272,7 @@ impl CalloraEscrow {
     /// # Events
     /// Emits `cooldown_set` with `caller` as topic and the new window as data.
     pub fn set_cooldown(env: Env, caller: Address, secs: u64) -> Result<(), EscrowError> {
+        Self::extend_instance_ttl(&env);
         Self::require_admin(&env, &caller)?;
         admin::set_cooldown(&env, secs)?;
 
@@ -259,11 +287,13 @@ impl CalloraEscrow {
     ///
     /// This is a read-only view and does not require initialization.
     pub fn cooldown_remaining(env: Env, action: Symbol) -> u64 {
+        Self::extend_instance_ttl(&env);
         admin::remaining(&env, &action)
     }
 
     /// Return `true` when the action tagged `action` may run now.
     pub fn is_ready(env: Env, action: Symbol) -> bool {
+        Self::extend_instance_ttl(&env);
         admin::is_ready(&env, &action)
     }
 
@@ -276,11 +306,13 @@ impl CalloraEscrow {
     /// # Errors
     /// * [`EscrowError::NotInitialized`] -- contract was never initialized.
     pub fn get_admin(env: Env) -> Result<Address, EscrowError> {
+        Self::extend_instance_ttl(&env);
         Self::admin(&env)
     }
 
     /// Return the pending admin for a two-step rotation, or `None`.
     pub fn get_pending_admin(env: Env) -> Option<Address> {
+        Self::extend_instance_ttl(&env);
         env.storage().instance().get(&StorageKey::PendingAdmin)
     }
 
@@ -289,6 +321,7 @@ impl CalloraEscrow {
     /// # Errors
     /// * [`EscrowError::NotInitialized`] -- contract was never initialized.
     pub fn get_signer(env: Env) -> Result<Address, EscrowError> {
+        Self::extend_instance_ttl(&env);
         env.storage()
             .instance()
             .get(&StorageKey::Signer)
@@ -297,6 +330,7 @@ impl CalloraEscrow {
 
     /// Return whether the contract is currently paused.
     pub fn is_paused(env: Env) -> bool {
+        Self::extend_instance_ttl(&env);
         env.storage()
             .instance()
             .get(&StorageKey::Paused)
@@ -326,6 +360,7 @@ impl CalloraEscrow {
     /// # Events
     /// Emits `action` with `caller` as topic and the `"release"` tag as data.
     pub fn release(env: Env, caller: Address, recipient: Address) -> Result<(), EscrowError> {
+        Self::extend_instance_ttl(&env);
         Self::require_not_paused(&env)?;
         Self::require_admin(&env, &caller)?;
         let action = Symbol::new(&env, ACTION_RELEASE);
@@ -342,7 +377,12 @@ impl CalloraEscrow {
         Ok(())
     }
 
-    /// Pause the escrow contract. Cool-off-guarded critical action (tag `"pause"`).
+    /// Pause the escrow contract. **Not** cooldown-gated — circuit-breakers
+    /// must be available instantly.
+    ///
+    /// An attacker who triggers an unpause (or the admin toggling during an
+    /// incident) must never be able to hold the contract live for an entire
+    /// cooldown window. `unpause` and `rotate_signer` retain their cooldowns.
     ///
     /// # Parameters
     /// * `caller` -- Must be the current admin; must authorize.
@@ -350,14 +390,13 @@ impl CalloraEscrow {
     /// # Errors
     /// * [`EscrowError::Unauthorized`] -- caller is not the current admin.
     /// * [`EscrowError::NotInitialized`] -- contract not initialized.
-    /// * [`EscrowError::CooldownActive`] -- a `pause` ran within the cool-off window.
     ///
     /// # Events
     /// Emits `action` with `caller` as topic and the `"pause"` tag as data.
     pub fn pause(env: Env, caller: Address) -> Result<(), EscrowError> {
+        Self::extend_instance_ttl(&env);
         Self::require_admin(&env, &caller)?;
         let action = Symbol::new(&env, ACTION_PAUSE);
-        admin::guard(&env, &action)?;
 
         env.storage().instance().set(&StorageKey::Paused, &true);
 
@@ -380,6 +419,7 @@ impl CalloraEscrow {
     /// # Events
     /// Emits `action` with `caller` as topic and the `"unpause"` tag as data.
     pub fn unpause(env: Env, caller: Address) -> Result<(), EscrowError> {
+        Self::extend_instance_ttl(&env);
         Self::require_admin(&env, &caller)?;
         let action = Symbol::new(&env, ACTION_UNPAUSE);
         admin::guard(&env, &action)?;
@@ -401,25 +441,39 @@ impl CalloraEscrow {
     /// # Errors
     /// * [`EscrowError::Unauthorized`] -- caller is not the current admin.
     /// * [`EscrowError::NotInitialized`] -- contract not initialized.
+    /// * [`EscrowError::InvalidInput`] -- `new_signer` equals the current signer.
     /// * [`EscrowError::CooldownActive`] -- a `rotate` ran within the cool-off window.
     ///
     /// # Events
-    /// Emits `action` with `caller` as topic and the `"rotate"` tag as data.
+    /// Emits `signer_rotated` with `caller` as topic and `(old_signer,
+    /// new_signer)` as data.
     pub fn rotate_signer(
         env: Env,
         caller: Address,
         new_signer: Address,
     ) -> Result<(), EscrowError> {
+        Self::extend_instance_ttl(&env);
         Self::require_admin(&env, &caller)?;
         let action = Symbol::new(&env, ACTION_ROTATE);
         admin::guard(&env, &action)?;
+
+        let old_signer: Address = env
+            .storage()
+            .instance()
+            .get(&StorageKey::Signer)
+            .ok_or(EscrowError::NotInitialized)?;
+        if old_signer == new_signer {
+            return Err(EscrowError::InvalidInput);
+        }
 
         env.storage()
             .instance()
             .set(&StorageKey::Signer, &new_signer);
 
-        env.events()
-            .publish((events::event_action(&env), caller), action);
+        env.events().publish(
+            (events::event_signer_rotated(&env), caller),
+            (old_signer, new_signer),
+        );
 
         Ok(())
     }
@@ -431,6 +485,7 @@ impl CalloraEscrow {
     /// explicitly approved by the admin returns `false` and is therefore not
     /// accepted by [`CalloraEscrow::create_escrow`].
     pub fn is_asset_approved(env: Env, asset: Address) -> bool {
+        Self::extend_instance_ttl(&env);
         env.storage()
             .instance()
             .get(&StorageKey::ApprovedAsset(asset))
@@ -446,9 +501,14 @@ impl CalloraEscrow {
         payment_asset: Address,
         recipient: Address,
     ) -> Option<EscrowRecord> {
-        env.storage()
-            .instance()
-            .get(&StorageKey::Escrow(payment_asset, recipient))
+        Self::extend_instance_ttl(&env);
+        let key = StorageKey::Escrow(payment_asset, recipient);
+        let persistent = env.storage().persistent();
+        let record: Option<EscrowRecord> = persistent.get(&key);
+        if record.is_some() {
+            persistent.extend_ttl(&key, ESCROW_TTL_LEDGERS, ESCROW_TTL_LEDGERS);
+        }
+        record
     }
 
     /// Approve `asset` as a payment asset for future escrow creation.
@@ -472,6 +532,7 @@ impl CalloraEscrow {
         caller: Address,
         asset: Address,
     ) -> Result<(), EscrowError> {
+        Self::extend_instance_ttl(&env);
         Self::require_admin(&env, &caller)?;
         Self::validate_asset(&env, &asset)?;
 
@@ -507,6 +568,7 @@ impl CalloraEscrow {
         caller: Address,
         asset: Address,
     ) -> Result<(), EscrowError> {
+        Self::extend_instance_ttl(&env);
         Self::require_admin(&env, &caller)?;
         Self::validate_asset(&env, &asset)?;
 
@@ -554,6 +616,7 @@ impl CalloraEscrow {
         recipient: Address,
         amount: i128,
     ) -> Result<(), EscrowError> {
+        Self::extend_instance_ttl(&env);
         Self::require_not_paused(&env)?;
         Self::require_admin(&env, &caller)?;
         Self::validate_asset(&env, &payment_asset)?;
@@ -568,7 +631,8 @@ impl CalloraEscrow {
         }
 
         let key = StorageKey::Escrow(payment_asset.clone(), recipient.clone());
-        if env.storage().instance().has(&key) {
+        let persistent = env.storage().persistent();
+        if persistent.has(&key) {
             return Err(EscrowError::EscrowExists);
         }
 
@@ -578,7 +642,8 @@ impl CalloraEscrow {
             amount,
             created_at: env.ledger().timestamp(),
         };
-        env.storage().instance().set(&key, &record);
+        persistent.set(&key, &record);
+        persistent.extend_ttl(&key, ESCROW_TTL_LEDGERS, ESCROW_TTL_LEDGERS);
 
         env.events()
             .publish((events::event_escrow_created(&env), caller), record);
@@ -618,6 +683,7 @@ impl CalloraEscrow {
     /// # Events
     /// Emits `admin_nominated` with `(caller)` as topic and `new_admin` as data.
     pub fn set_admin(env: Env, caller: Address, new_admin: Address) -> Result<(), EscrowError> {
+        Self::extend_instance_ttl(&env);
         Self::require_admin(&env, &caller)?;
 
         env.storage()
@@ -643,6 +709,7 @@ impl CalloraEscrow {
     /// # Events
     /// Emits `admin_accepted` with `(old_admin)` as topic and `new_admin` as data.
     pub fn accept_admin(env: Env, caller: Address) -> Result<(), EscrowError> {
+        Self::extend_instance_ttl(&env);
         caller.require_auth();
 
         let pending: Address = env
@@ -662,6 +729,41 @@ impl CalloraEscrow {
 
         env.events()
             .publish((events::event_admin_accepted(&env), old_admin), pending);
+
+        Ok(())
+    }
+
+    /// Cancel a pending admin transfer. Only the current admin may call.
+    ///
+    /// Returns [`EscrowError::NoPendingAdmin`] when no nomination is in progress.
+    /// Clears the pending admin and emits `admin_cancelled` with the previous
+    /// pending admin address.
+    ///
+    /// # Parameters
+    /// * `caller` -- Must be the current admin; must authorize.
+    ///
+    /// # Errors
+    /// * [`EscrowError::NotInitialized`] -- contract not initialized.
+    /// * [`EscrowError::NoPendingAdmin`] -- no nomination is in progress.
+    ///
+    /// # Events
+    /// Emits `admin_cancelled` with `(caller)` as topic and the cancelled
+    /// pending admin address as data.
+    pub fn cancel_admin_transfer(env: Env, caller: Address) -> Result<(), EscrowError> {
+        Self::require_admin(&env, &caller)?;
+
+        let cancelled: Address = env
+            .storage()
+            .instance()
+            .get(&StorageKey::PendingAdmin)
+            .ok_or(EscrowError::NoPendingAdmin)?;
+
+        env.storage()
+            .instance()
+            .remove(&StorageKey::PendingAdmin);
+
+        env.events()
+            .publish((events::event_admin_cancelled(&env), caller), cancelled);
 
         Ok(())
     }

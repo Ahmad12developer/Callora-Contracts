@@ -393,3 +393,34 @@ fn init_default_min_deposit_is_one() {
     );
     assert_eq!(meta.min_deposit, DEFAULT_MIN_DEPOSIT);
 }
+
+#[test]
+fn init_none_initial_balance_allows_deposit_and_deduct() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let owner = Address::generate(&env);
+    let (_, client) = create_vault(&env);
+    let (usdc, _, usdc_admin) = create_usdc(&env, &owner);
+    let settlement = Address::generate(&env);
+
+    client.init(
+        &owner,
+        &usdc,
+        &None,
+        &Some(owner.clone()),
+        &Some(1),
+        &None,
+        &Some(1000),
+        &Some(settlement),
+    );
+
+    usdc_admin.mint(&owner, &100);
+
+    // Deposit 50
+    client.deposit(&owner, &50);
+    assert_eq!(client.balance(), 50);
+
+    // Deduct 20
+    client.deduct(&owner, &20, &123);
+    assert_eq!(client.balance(), 30);
+}

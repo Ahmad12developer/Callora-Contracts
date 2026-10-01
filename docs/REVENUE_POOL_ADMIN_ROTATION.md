@@ -24,7 +24,7 @@ pool.set_admin(current_admin_address, proposed_new_admin_address);
  
 - **Action**: Sets the `PENDING_ADMIN` storage key.
 - **Auth**: Requires signature from `current_admin`.
-- **Event**: Emits `admin_transfer_started(current_admin, pending_admin)`.
+- **Event**: Emits `admin_transfer_started(current_admin, pending_admin)` and nothing else — no `admin_changed` event is published until Step 2 completes.
 - **State**: The current admin retains all privileges until Step 2 is completed.
  
 ### Step 2: Acceptance
@@ -37,7 +37,7 @@ pool.claim_admin(proposed_new_admin_address);
  
 - **Action**: Updates `ADMIN` to the caller's address and clears `PENDING_ADMIN`.
 - **Auth**: Requires signature from the `proposed_new_admin`.
-- **Event**: Emits `admin_transfer_completed(new_admin)`.
+- **Event**: Emits `admin_changed(previous_admin, new_admin)` recording the actual change, then `admin_transfer_completed(new_admin)`.
 - **State**: Administrative control is fully transferred to the new address.
  
 ## Security Considerations

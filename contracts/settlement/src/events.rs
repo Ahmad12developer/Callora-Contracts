@@ -29,8 +29,9 @@ use soroban_sdk::{Address, BytesN, Env, Symbol};
 use crate::limits::MinBalanceChanged;
 use crate::types::{
     AdminBroadcast, AdminMigrationEvent, BalanceCreditedEvent, DailyWithdrawCapChanged,
-    DepositEvent, DeveloperClaimWindowChanged, DeveloperForceCreditedEvent, DeveloperWithdrawEvent,
-    GlobalPool, PaymentReceivedEvent, VaultAcceptedEvent, VaultProposedEvent,
+    DeductionRecordedEvent, DepositEvent, DeveloperClaimWindowChanged, DeveloperForceCreditedEvent,
+    DeveloperWithdrawEvent, GlobalPool, PaymentReceivedEvent, UpgradeCancelledEvent, UpgradeProposedEvent,
+    VaultAcceptedEvent, VaultProposedEvent,
 };
 
 // ─── Topic constructors ──────────────────────────────────────────────────────
@@ -61,6 +62,49 @@ pub fn event_initialized(env: &Env) -> Symbol {
 /// * `env` - Soroban environment handle.
 pub fn event_payment_received(env: &Env) -> Symbol {
     Symbol::new(env, "payment_received")
+}
+/// Returns the Symbol for the `supported_token_added` event topic.
+pub fn event_supported_token_added(env: &Env) -> Symbol {
+    Symbol::new(env, "supported_token_added")
+}
+
+/// Returns the Symbol for the `supported_token_removed` event topic.
+pub fn event_supported_token_removed(env: &Env) -> Symbol {
+    Symbol::new(env, "supported_token_removed")
+}
+
+/// Emit `supported_token_added` when an admin enables a payment token.
+pub fn emit_supported_token_added(env: &Env, caller: &Address, token: &Address) {
+    env.events().publish(
+        (
+            event_supported_token_added(env),
+            caller.clone(),
+            token.clone(),
+        ),
+        token.clone(),
+    );
+}
+
+/// Emit `supported_token_removed` when an admin disables a payment token.
+pub fn emit_supported_token_removed(env: &Env, caller: &Address, token: &Address) {
+    env.events().publish(
+        (
+            event_supported_token_removed(env),
+            caller.clone(),
+            token.clone(),
+        ),
+        token.clone(),
+    );
+}
+
+/// Returns the canonical Symbol for the `deduction_recorded` event topic.
+pub fn event_deduction_recorded(env: &Env) -> Symbol {
+    Symbol::new(env, "deduction_recorded")
+}
+
+/// Emit an accounting-only vault deduction after its replay marker is stored.
+pub fn emit_deduction_recorded(env: &Env, data: DeductionRecordedEvent) {
+    env.events().publish((event_deduction_recorded(env),), data);
 }
 
 /// Returns the Symbol for the `"balance_credited"` event topic.
@@ -306,7 +350,36 @@ pub fn event_metadata_removed(env: &Env) -> Symbol {
     Symbol::new(env, "metadata_removed")
 }
 
+/// Returns the Symbol for the `"price_set"` event topic.
+pub fn event_price_set(env: &Env) -> Symbol {
+    Symbol::new(env, "price_set")
+}
+
+/// Returns the Symbol for the `"price_removed"` event topic.
+pub fn event_price_removed(env: &Env) -> Symbol {
+    Symbol::new(env, "price_removed")
+}
+
 // ─── Emit helpers ────────────────────────────────────────────────────────────
+
+/// Emit `"price_set"` when an offering price is created or changed.
+pub fn emit_price_set(
+    env: &Env,
+    offering_id: &soroban_sdk::String,
+    old: Option<soroban_sdk::String>,
+    new: &soroban_sdk::String,
+) {
+    env.events().publish(
+        (event_price_set(env), offering_id.clone()),
+        (old, new.clone()),
+    );
+}
+
+/// Emit `"price_removed"` when an existing offering price is removed.
+pub fn emit_price_removed(env: &Env, offering_id: &soroban_sdk::String, old: &soroban_sdk::String) {
+    env.events()
+        .publish((event_price_removed(env), offering_id.clone()), old.clone());
+}
 
 /// Emit `"initialized"` once when the settlement contract is first set up.
 ///
@@ -664,6 +737,52 @@ pub fn emit_developer_min_balance_changed(
     );
 }
 
+// ─── Upgrade timelock events ─────────────────────────────────────────────────
+
+/// Returns the Symbol for the `"upgrade_proposed"` event topic.
+pub fn event_upgrade_proposed(env: &Env) -> Symbol {
+    Symbol::new(env, "upgrade_proposed")
+}
+
+/// Returns the Symbol for the `"upgrade_cancelled"` event topic.
+pub fn event_upgrade_cancelled(env: &Env) -> Symbol {
+    Symbol::new(env, "upgrade_cancelled")
+}
+
+/// Emit `"upgrade_proposed"` when the admin proposes a timelocked WASM upgrade.
+///
+/// **What**: Records a pending WASM hash together with the execution deadline.
+///
+/// **How**: `env.events().publish()` with topic `(upgrade_proposed, caller)` and payload `UpgradeProposedEvent`.
+///
+/// **Why**: Lets off-chain watchers detect and verify an upcoming upgrade before it executes.
+///
+/// # Arguments
+/// * `env` - Soroban environment handle.
+/// * `caller` - Admin address proposing the upgrade.
+/// * `payload` - Structured proposal details.
+pub fn emit_upgrade_proposed(env: &Env, caller: &Address, payload: UpgradeProposedEvent) {
+    env.events()
+        .publish((event_upgrade_proposed(env), caller.clone()), payload);
+}
+
+/// Emit `"upgrade_cancelled"` when the admin cancels a pending upgrade proposal.
+///
+/// **What**: Records that a previously proposed WASM upgrade has been voided.
+///
+/// **How**: `env.events().publish()` with topic `(upgrade_cancelled, caller)` and payload `UpgradeCancelledEvent`.
+///
+/// **Why**: Audit trail confirming no upgrade took place for the cancelled hash.
+///
+/// # Arguments
+/// * `env` - Soroban environment handle.
+/// * `caller` - Admin address cancelling the proposal.
+/// * `payload` - Structured cancellation details.
+pub fn emit_upgrade_cancelled(env: &Env, caller: &Address, payload: UpgradeCancelledEvent) {
+    env.events()
+        .publish((event_upgrade_cancelled(env), caller.clone()), payload);
+}
+
 // ─── Tests ───────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -681,6 +800,15 @@ mod tests {
     fn test_event_initialized_bytes() {
         let env = Env::default();
         assert_eq!(event_initialized(&env), Symbol::new(&env, "initialized"));
+    }
+
+    #[test]
+    fn test_event_deduction_recorded_bytes() {
+        let env = Env::default();
+        assert_eq!(
+            event_deduction_recorded(&env),
+            Symbol::new(&env, "deduction_recorded")
+        );
     }
 
     #[test]
@@ -831,6 +959,24 @@ mod tests {
         assert_eq!(
             event_metadata_removed(&env),
             Symbol::new(&env, "metadata_removed")
+        );
+    }
+
+    #[test]
+    fn test_event_upgrade_proposed_bytes() {
+        let env = Env::default();
+        assert_eq!(
+            event_upgrade_proposed(&env),
+            Symbol::new(&env, "upgrade_proposed")
+        );
+    }
+
+    #[test]
+    fn test_event_upgrade_cancelled_bytes() {
+        let env = Env::default();
+        assert_eq!(
+            event_upgrade_cancelled(&env),
+            Symbol::new(&env, "upgrade_cancelled")
         );
     }
 }

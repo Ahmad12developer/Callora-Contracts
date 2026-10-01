@@ -2,6 +2,65 @@
 
 This document describes the storage layout of the Callora Vault contract, including storage keys, data types, and access control implications.
 
+## TTL Policy Rationale
+
+This section captures the rationale for every storage tier's TTL constants and their relationship to the cross-contract policy defined in [`docs/STORAGE_TTL_DOCTOR.md`](../../docs/STORAGE_TTL_DOCTOR.md).
+
+### Why named constants matter
+
+Magic-number literals (`50000`, etc.) make audits error-prone and prevent the TTL doctor script from validating expected values against live on-chain state. Every `extend_ttl` call in this contract must reference a named constant so the doctor can load the expected values from the policy table.
+
+### Ledger rate assumption
+
+**17 280 ledgers/day** (5-second close time on Stellar mainnet). All TTL values below use this rate.
+
+### Instance storage (long-lived config)
+
+| Constant                  | Value (ledgers)           | Approximate Duration | Rationale |
+| ------------------------- | ------------------------- | -------------------- | --------- |
+| `INSTANCE_BUMP_THRESHOLD` | `17_280 × 30` = 518 400  | ~30 days             | Bump fires when fewer than 30 days of TTL remain, giving operators a large observation window before archival. |
+| `INSTANCE_BUMP_AMOUNT`    | `17_280 × 60` = 1 036 800 | ~60 days             | Each bump doubles the window. Minimises on-chain write frequency while keeping archival risk low. |
+
+All critical vault state (Admin, Balance, Settlement, RevenuePool, MaxDeduct, Paused, Metadata, DepositorList, …) lives in instance storage. To prevent archival on infrequently-used vaults, every **mutating** entrypoint calls `env.storage().instance().extend_ttl(INSTANCE_BUMP_THRESHOLD, INSTANCE_BUMP_AMOUNT)`.
+
+Entrypoints that bump instance TTL: `init`, `deposit`, `deduct`, `batch_deduct`, `withdraw`, `withdraw_to`, `set_allowed_depositor`, `set_authorized_caller`, `set_settlement`, `set_revenue_pool`, `set_max_deduct`, `set_metadata`, `upgrade`, `pause`, `unpause`, `set_reserve_cap`.
+
+Pure view functions (`get_meta`, `balance`, `get_admin`, `get_usdc_token`, `get_settlement`, `get_revenue_pool`, `get_contract_addresses`, `is_paused`, `is_authorized_depositor`, `get_metadata`, `get_max_deduct`, `get_allowed_depositors`, `is_request_processed`, `get_reserve_cap`) do **not** bump the TTL — they are read-only and incur no write cost.
+
+### Persistent storage — request-id idempotency markers
+
+| Constant                    | Value (ledgers)          | Approximate Duration | Rationale |
+| --------------------------- | ------------------------ | -------------------- | --------- |
+| `REQUEST_ID_BUMP_THRESHOLD` | `17_280 × 7` = 120 960  | ~7 days              | Idempotency markers must outlive the client retry window. 7 days covers typical backend re-submission timeouts. |
+| `REQUEST_ID_BUMP_AMOUNT`    | `17_280 × 30` = 518 400 | ~30 days             | 30-day bump is a best-effort deduplication guarantee. After expiry the marker auto-archives and the `request_id` can be reused (callers requiring longer windows must track off-chain). |
+
+`StorageKey::ProcessedRequest(Symbol)` uses **temporary storage** — it auto-archives after TTL expiry; no manual cleanup is required.
+
+### Persistent storage — rate-limit token bucket
+
+| Constant                  | Value (ledgers)          | Approximate Duration | Rationale |
+| ------------------------- | ------------------------ | -------------------- | --------- |
+| `RATE_LIMIT_BUMP_THRESHOLD` | `17_280 × 7` = 120 960 | ~7 days              | Rate-limit state must persist across refill windows. 7 days exceeds any realistic refill period. |
+| `RATE_LIMIT_BUMP_AMOUNT`   | `17_280 × 30` = 518 400 | ~30 days             | Aligns with idempotency-marker policy: short-lived persistent records use a 30-day bump. |
+
+`StorageKey::DeveloperState(Address)` persists the token-bucket state. Constants declared in `rate_limit.rs` as `RATE_LIMIT_BUMP_THRESHOLD` and `RATE_LIMIT_BUMP_AMOUNT`.
+
+### Persistent storage — reserve caps
+
+Reserve cap entries (`StorageKey::ReserveCap(Address)`) are admin configuration. They follow the **instance storage policy** (30-day threshold, 60-day bump) because they are long-lived and critical. The `set_reserve_cap` entrypoint calls `extend_ttl(INSTANCE_BUMP_THRESHOLD, INSTANCE_BUMP_AMOUNT)` on the cap key.
+
+> **Note:** `INSTANCE_BUMP_THRESHOLD` and `INSTANCE_BUMP_AMOUNT` must be declared at the crate root (e.g. in `lib.rs`) for the `limits.rs` module to import them. The current simplified `lib.rs` does not declare these constants — this is a tracked bug (see `docs/STORAGE_TTL_DOCTOR.md` Action Items).
+
+### Cross-contract policy alignment
+
+This vault's TTL constants are the **reference values** for the cross-contract target policy documented in [`docs/STORAGE_TTL_DOCTOR.md`](../../docs/STORAGE_TTL_DOCTOR.md). Specifically:
+
+- `INSTANCE_BUMP_THRESHOLD = 17_280 * 30` and `INSTANCE_BUMP_AMOUNT = 17_280 * 60` are the target for all long-lived instance and persistent entries across Vault, Settlement, and Revenue Pool.
+- `RATE_LIMIT_BUMP_THRESHOLD` / `RATE_LIMIT_BUMP_AMOUNT` are the target for short-lived persistent entries (timelocks, migration records).
+- The TTL doctor script (`scripts/storage-ttl-doctor.ts`) uses these values as the expected baseline when `--policy` is passed.
+
+---
+
 ## Instance Storage TTL
 
 All critical vault state lives in instance storage. To prevent archival on infrequently-used vaults, **every mutating entrypoint** and **every public view function ("hot read path")** calls `env.storage().instance().extend_ttl(threshold, extend_to)`.
@@ -99,8 +158,7 @@ pub enum StorageKey {
     Metadata(String),              // String (offering metadata by offering_id)
     PendingOwner,                  // Address
     PendingAdmin,                  // Address
-    Depositor(Address),            // bool — persistent storage, allowlist membership
-    DepositorIndex,                // Vec<Address> — persistent storage, paginated enumeration index
+    AllowedDepositors,             // Vec<Address> — instance storage, deposit allowlist
     ContractVersion,               // BytesN<32>
     ProcessedRequest(Symbol),      // bool — persistent storage, idempotency marker
 }
@@ -122,8 +180,8 @@ pub enum StorageKey {
 | `OfferingIndex`            | Instance      | `Vec<String>`     | Ordered list of offering IDs with stored prices        | `set_price()`, `remove_price()`, `list_prices()`                           |
 | `PendingOwner`             | Instance      | `Address`         | Two-step ownership transfer nominee                    | `transfer_ownership()`, `accept_ownership()`                               |
 | `PendingAdmin`             | Instance      | `Address`         | Two-step admin transfer nominee                        | `set_admin()`, `accept_admin()`                                            |
-| `Depositor(Address)`       | **Persistent** | `bool`           | Allowlist membership for a depositor (O(1) lookup)     | `set_allowed_depositor()`, `remove_allowed_depositor()`, `is_authorized_depositor()` |
-| `DepositorIndex`           | **Persistent** | `Vec<Address>`   | Paginated enumeration index of allowed depositors      | `set_allowed_depositor()`, `remove_allowed_depositor()`, `get_allowed_depositors()` |
+| `Depositor(Address)` / `DepositorIndex` | — | — | **Removed (#1110)** — never written; the canonical allowlist entry is `AllowedDepositors` below | — |
+| `AllowedDepositors`          | Instance      | `Vec<Address>`    | Addresses permitted to deposit (owner bypasses)       | `add_address()`, `clear_all()`, `deposit()`, `is_authorized_depositor()` |
 | `ContractVersion`          | Instance      | `BytesN<32>`      | WASM hash set by `upgrade()`                           | `upgrade()`, `version()`                                                   |
 | `ProcessedRequest(Symbol)` | **Temporary** | `bool`            | Idempotency marker for a processed deduct `request_id` | Written by `deduct()` / `batch_deduct()`; read by `is_request_processed()` |
 | Key Variant | Storage Tier | Value Type | Description | Access |
@@ -138,7 +196,7 @@ pub enum StorageKey {
 | `Metadata(String)` | Instance | `String` | Per-offering metadata (IPFS CID / URI) | `set_metadata()`, `get_metadata()`, `update_metadata()` |
 | `PendingOwner` | Instance | `Address` | Two-step ownership transfer nominee | `transfer_ownership()`, `accept_ownership()` |
 | `PendingAdmin` | Instance | `Address` | Two-step admin transfer nominee | `set_admin()`, `accept_admin()` |
-| `DepositorList` | Instance | `Vec<Address>` | Allowed depositor addresses | `set_allowed_depositor()`, `get_allowed_depositors()` |
+| `DepositorList` (renamed `AllowedDepositors`) | Instance | `Vec<Address>` | Allowed depositor addresses | `add_address()`, `clear_all()`, `get_allowlist()` |
 | `ContractVersion` | Instance | `BytesN<32>` | WASM hash set by `upgrade()` | `upgrade()`, `version()` |
 | `ProcessedRequest(Symbol)` | **Persistent** | `bool`            | Idempotency marker for a processed deduct `request_id` | Written by `deduct()` / `batch_deduct()`; read by `is_request_processed()` |
 | `LifetimeDeposit(Address)` | **Persistent** | `i128`            | Cumulative USDC ever deposited by a given address; never decrements | Written by `deposit()`; read by `get_lifetime_deposit()` / `list_lifetime_deposits()` |
@@ -217,9 +275,9 @@ Sets up the vault with initial state:
 
 | Operation                          | Reads                   | Writes                               | Authorization |
 | ---------------------------------- | ----------------------- | ------------------------------------ | ------------- |
-| `set_allowed_depositor(depositor)` | AllowedDepositors       | AllowedDepositors (append or remove) | Owner only    |
-| `set_authorized_caller(caller)`    | Meta                    | Meta (authorized_caller field)       | Owner only    |
-| `is_authorized_depositor(caller)`  | Meta, AllowedDepositors | —                                    | Public read   |
+| `add_address(depositor)` / `clear_all()` | AllowedDepositors       | AllowedDepositors (append or remove) | Owner only    |
+| `set_authorized_caller(caller)` | Meta                    | Meta (authorized_caller field)       | Owner only    |
+| `is_authorized_depositor(caller)`  | Owner, AllowedDepositors | —                                    | Public read   |
 
 ### Settlement & Routing
 
@@ -337,7 +395,7 @@ env.storage().instance().set(&StorageKey::Meta, &new_meta);
 
 ### Access Control
 
-- **Owner-Only Operations:** `set_allowed_depositor()`, `set_authorized_caller()`, `transfer_ownership()`, `withdraw()`, `withdraw_to()`, metadata operations
+- **Owner-Only Operations:** `add_address()`, `clear_all()`, `set_authorized_caller()`, `transfer_ownership()`, `withdraw()`, `withdraw_to()`, metadata operations
 - **Admin-Only Operations:** `distribute()`, `set_admin()`, `set_settlement()`, `set_revenue_pool()`
 - **Public Operations:** `balance()`, `get_meta()`, `get_metadata()`, `is_authorized_depositor()`, `get_settlement()`, `get_revenue_pool()` (all read-only)
 - **Depositor Operations:** `deposit()` (owner or allowed depositor); `deduct()` and `batch_deduct()` (owner or authorized_caller)
@@ -406,6 +464,7 @@ Monitor storage-related events:
 | 1.1     | Renamed `StorageKey` → `DataKey`; added doc comments to all variants; removed stale `// Replaced by StorageKey enum variants` comment; updated STORAGE.md                                                                                                                     |
 | 1.2     | Added `StorageKey::ProcessedRequest(Symbol)` in **temporary storage** for `request_id` idempotency in `deduct` and `batch_deduct`. Added `VaultError::DuplicateRequestId` (code 28). Added `is_request_processed(request_id)` view. TTL: threshold ~7 days, bump to ~30 days. |
 | 1.4     | **Buffer #5 — TTL bump on hot read paths.** Added public TTL constants (`LEDGERS_PER_DAY`, `INSTANCE_BUMP_THRESHOLD/AMOUNT`, `PERSISTENT_BUMP_THRESHOLD/AMOUNT`, `REQUEST_ID_BUMP_THRESHOLD/AMOUNT`). Instance TTL now bumped at **entry** of EVERY public view call (`balance`, `get_*`, `is_*`) so read-only usage keeps vault alive. Persistent `PendingPause/PendingUpgrade/PendingSweep` keys bumped by `get_pending_*` getters when the proposal exists. Write entrypoints continue to bump at exit. Added new `VaultError` codes 44-47 (proposal/timelock errors) and declared `pub mod timelock`. |
+| 1.5     | Issue #1110 — removed never-written `DataKey::Depositor(Address)` and `DataKey::AllowedDepositorsList`. `is_authorized_depositor()` now reads `Owner` + `StorageKey::AllowedDepositors` through the same private helper as `deposit()`, so the view and the deposit gate can no longer diverge (owner included; documented). |
 | Version | Change |
 |---------|--------|
 | 1.0 | Initial `StorageKey` enum with `Meta`, `AllowedDepositors`, `Admin`, `UsdcToken`, `Settlement`, `RevenuePool`, `MaxDeduct`, `Metadata(String)` |

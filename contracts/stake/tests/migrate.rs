@@ -395,3 +395,89 @@ fn migrate_preserves_exact_checkpoint() {
     let result = client.migrate(&admin, &1, &2);
     assert_eq!(result.last_checkpoint, checkpoint);
 }
+
+// ─── Negative-path upgrade-auth tests ────────────────────────────────────────
+
+#[test]
+fn authorize_upgrade_rejects_zero_hash() {
+    let env = Env::default();
+    let (admin, contract) = setup(&env, 100, 1);
+    let client = CalloraStakeMigrateClient::new(&env, &contract);
+    // An all-zero hash is almost certainly a mistake — must be rejected.
+    let zero_hash = BytesN::from_array(&env, &[0u8; 32]);
+
+    let result = client.try_authorize_upgrade(&admin, &1, &zero_hash);
+    assert!(result.is_err(), "all-zero wasm hash must be rejected");
+}
+
+#[test]
+fn is_upgrade_authorised_false_after_version_bump_via_migrate() {
+    // Arrange: authorize for version 1, then migrate (version advances 1 → 2).
+    let env = Env::default();
+    let (admin, contract) = setup(&env, 100, 1);
+    let client = CalloraStakeMigrateClient::new(&env, &contract);
+    let hash = BytesN::from_array(&env, &[0xAA; 32]);
+
+    client.authorize_upgrade(&admin, &1, &hash);
+    assert!(
+        client.is_upgrade_authorised(&hash),
+        "authorisation should be valid before migration"
+    );
+
+    // Act: migration advances the stored version to 2.
+    client.migrate(&admin, &1, &2);
+
+    // Assert: the stale auth (stored for version 1) is no longer valid because
+    // the stored version and the authorised version no longer agree.
+    assert!(
+        !client.is_upgrade_authorised(&hash),
+        "stale auth from version 1 must be invalid after migration to version 2"
+    );
+}
+
+#[test]
+fn reauthorize_with_old_version_after_migration_is_rejected() {
+    // After migrate bumps the stored version to 2, supplying target_version=1
+    // must return VersionMismatch.
+    let env = Env::default();
+    let (admin, contract) = setup(&env, 100, 1);
+    let client = CalloraStakeMigrateClient::new(&env, &contract);
+    let hash = BytesN::from_array(&env, &[0xBB; 32]);
+
+    client.migrate(&admin, &1, &2);
+
+    let result = client.try_authorize_upgrade(&admin, &1, &hash);
+    assert!(
+        result.is_err(),
+        "re-authorise with old version (1) must fail after migration to version 2"
+    );
+}
+
+#[test]
+fn reauthorize_with_new_version_after_migration_succeeds() {
+    // After migrate bumps the stored version to 2, authorising for version 2
+    // must succeed and is_upgrade_authorised must return true for the new hash.
+    let env = Env::default();
+    let (admin, contract) = setup(&env, 100, 1);
+    let client = CalloraStakeMigrateClient::new(&env, &contract);
+    let old_hash = BytesN::from_array(&env, &[0xAA; 32]);
+    let new_hash = BytesN::from_array(&env, &[0xBB; 32]);
+
+    // Authorise for version 1 first (pre-migration).
+    client.authorize_upgrade(&admin, &1, &old_hash);
+
+    // Run migration — version is now 2, old auth is stale.
+    client.migrate(&admin, &1, &2);
+
+    // Re-authorise for the new version.
+    client.authorize_upgrade(&admin, &2, &new_hash);
+
+    assert!(
+        client.is_upgrade_authorised(&new_hash),
+        "new hash authorised for version 2 must be valid"
+    );
+    assert!(
+        !client.is_upgrade_authorised(&old_hash),
+        "old hash must not be valid after re-authorisation for version 2"
+    );
+}

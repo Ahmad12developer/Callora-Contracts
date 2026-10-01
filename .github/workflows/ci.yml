@@ -5,6 +5,7 @@ on:
     branches: [main, master, develop, 'feature/**', 'chore/**', 'ci/**']
   pull_request:
     branches: [main, master, develop]
+    types: [opened, synchronize, reopened, labeled, unlabeled]
   schedule:
     - cron: '0 0 * * *' # Run nightly
 
@@ -12,20 +13,16 @@ jobs:
   test:
     name: Test
     runs-on: ubuntu-latest
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
-        continue-on-error: true
 
       - name: Install Rust
-        continue-on-error: true
         uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
           targets: wasm32-unknown-unknown
 
       - name: Cache cargo
-        continue-on-error: true
         uses: actions/cache@v4
         with:
           path: |
@@ -37,23 +34,25 @@ jobs:
             ${{ runner.os }}-cargo-
 
       - name: Check format (workspace crates)
-        continue-on-error: true
         run: cargo fmt --all -- --check
 
       - name: Clippy
-        continue-on-error: true
         run: cargo clippy --all-targets --all-features -- -D warnings
 
-      - name: Build settlement WASM for tests
+      - name: Check Fuzz Targets
         continue-on-error: true
+        run: cargo check -p callora-settlement-fuzz
+
+      - name: Build settlement WASM for tests
         run: cargo build --package callora-settlement --target wasm32-unknown-unknown --release
 
       - name: Test (all workspace members)
-        continue-on-error: true
         run: cargo test --workspace
 
+  # The only non-blocking job in this workflow: it pins the nightly toolchain,
+  # which is expected to break on unrelated churn. Every other job is blocking.
   test-nightly:
-    name: Test (Nightly)
+    name: Test (Nightly, optional — non-blocking)
     runs-on: ubuntu-latest
     continue-on-error: true
     steps:
@@ -89,19 +88,15 @@ jobs:
   build:
     name: Build (release)
     runs-on: ubuntu-latest
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
-        continue-on-error: true
 
       - name: Install Rust
-        continue-on-error: true
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
 
       - name: Cache cargo
-        continue-on-error: true
         uses: actions/cache@v4
         with:
           path: |
@@ -113,7 +108,6 @@ jobs:
             ${{ runner.os }}-cargo-
 
       - name: Check WASM size
-        continue-on-error: true
         shell: bash
         run: |
           chmod +x scripts/check-wasm-size.sh
@@ -122,14 +116,67 @@ jobs:
   event-shape:
     name: Event shape vs schema
     runs-on: ubuntu-latest
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
-        continue-on-error: true
 
       - name: Check revenue_pool event shape matches EVENT_SCHEMA.md
-        continue-on-error: true
         shell: bash
         run: |
           chmod +x scripts/check-event-shape.sh
           ./scripts/check-event-shape.sh
+
+  gas-regression:
+    name: Gas regression vs baseline
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-gas-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-gas-
+
+      - name: Build crates needed for gas measurement
+        run: |
+          cargo build --workspace --release
+          cargo build --package callora-settlement --target wasm32-unknown-unknown --release
+
+      - name: Run gas regression check
+        id: gas
+        shell: bash
+        env:
+          GAS_OVERRIDE: ${{ contains(github.event.pull_request.labels.*.name, 'gas-override') }}
+        run: |
+          chmod +x scripts/gas-regression.sh
+          set +e
+          ./scripts/gas-regression.sh
+          status=$?
+          set -e
+          echo "exit_code=$status" >> "$GITHUB_OUTPUT"
+          if [ "$status" -ne 0 ] && [ "$GAS_OVERRIDE" != "true" ]; then
+            echo "::error::Gas regression detected and 'gas-override' label is not present."
+            exit "$status"
+          fi
+          if [ "$status" -ne 0 ] && [ "$GAS_OVERRIDE" = "true" ]; then
+            echo "::warning::Gas regression detected but 'gas-override' label is present; allowing."
+          fi
+
+      - name: Upload gas report artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gas-report
+          path: target/gas-report.md
+          if-no-files-found: warn

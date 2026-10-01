@@ -20,7 +20,7 @@
 //! | Distribution                     | `distribute`, `batch_distribute` |
 //! | Upgrade / broadcast              | `upgrade`, `broadcast` |
 //! | Emergency drain                  | `propose_emergency_drain`, `execute_emergency_drain`, `cancel_emergency_drain` |
-//! | Read‑only views + helpers        | `get_admin`, `get_usdc_token`, `get_pending_admin`, `get_pause_guardian`, `is_paused`, `get_cumulative_yield_deposited`, `get_max_distribute`, `balance`, `get_version`, `version`, `get_storage_ttl`, `get_pending_emergency_drain`, `chunk_iter` |
+//! | Read‑only views + helpers        | `get_admin`, `get_usdc_token`, `get_pending_admin`, `get_pause_guardian`, `is_paused`, `get_cumulative_yield_deposited`, `get_max_distribute`, `balance`, `get_version`, `version`, `get_ttl_policy`, `get_pending_emergency_drain`, `chunk_iter` |
 
 extern crate std;
 
@@ -492,15 +492,15 @@ fn version_does_not_require_auth() {
     assert!(!v.is_empty());
 }
 
-/// `get_storage_ttl` is a view — it must not require auth.
+/// `get_ttl_policy` is a view — it must not require auth.
 #[test]
-fn get_storage_ttl_does_not_require_auth() {
+fn get_ttl_policy_does_not_require_auth() {
     let env = Env::default();
     let (_, _, client, _, _, _) = setup_pool(&env);
 
     env.set_auths(&[]);
-    let entries = client.get_storage_ttl();
-    assert!(!entries.is_empty());
+    let policy = client.get_ttl_policy();
+    assert!(!policy.is_empty());
 }
 
 /// `get_pending_emergency_drain` is a view — it must not require auth.

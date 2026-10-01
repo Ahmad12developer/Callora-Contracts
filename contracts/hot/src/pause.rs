@@ -7,12 +7,20 @@
 //! views to continue serving. Three functions are exposed:
 //!
 //! * [`is_paused`] — read the current flag (no auth, no side-effects).
-//! * [`do_pause`] — set the paused flag to `true` (enforces cool-off).
+//! * [`do_pause`] — set the paused flag to `true`. **No cooldown gating.**
 //! * [`do_unpause`] — clear the paused flag to `false` (enforces cool-off).
 //!
-//! Both state-changing functions are cool-off-guarded (via
-//! [`crate::admin::guard`]) and require the caller to already have passed the
-//! admin check performed by the entrypoints in `lib.rs`.
+//! # Asymmetric cooldown design
+//!
+//! `do_pause` is intentionally **exempt** from the cooldown guard
+//! ([`crate::admin::guard`]). Circuit-breakers must be available instantly:
+//! if an attacker triggers an unpause (or the admin toggles during an
+//! incident), a pending `"pause"` cooldown would keep the contract live for
+//! the entire window — defeating the purpose of the circuit-breaker.
+//!
+//! `do_unpause` **retains** its cooldown. Deliberately re-opening the
+//! contract is a high-impact action that benefits from rate-limiting.
+//! Signer rotation also retains its cooldown (unchanged).
 //!
 //! # State
 //!
@@ -50,25 +58,26 @@ pub fn is_paused(env: &Env) -> bool {
 
 /// Activate the circuit-breaker.
 ///
-/// Sets the [`StorageKey::Paused`] flag to `true` and records the action
-/// timestamp for the cool-off guard. Emits a dedicated `paused` event.
+/// Sets the [`StorageKey::Paused`] flag to `true`. Emits a dedicated
+/// `paused` event.
+///
+/// This function is **not** cooldown-gated. Circuit-breakers must be
+/// available instantly: a pending cooldown window from any prior admin
+/// action must never delay an emergency pause. See module-level docs for
+/// the full asymmetric-cooldown rationale.
 ///
 /// # Preconditions (must be satisfied by the caller in `lib.rs`)
 /// * `caller` has already passed `require_admin`.
 ///
 /// # Errors
 /// * [`HotError::AlreadyPaused`] — the contract is already paused.
-/// * [`HotError::CooldownActive`] — a `"pause"` action fired within the
-///   current cool-off window.
 ///
 /// # Events
 /// Emits `paused` with `caller` as topic and no extra data.
-pub fn do_pause(env: &Env, caller: &Address, action: &Symbol) -> Result<(), HotError> {
+pub fn do_pause(env: &Env, caller: &Address) -> Result<(), HotError> {
     if is_paused(env) {
         return Err(HotError::AlreadyPaused);
     }
-
-    admin::guard(env, action)?;
 
     env.storage().instance().set(&StorageKey::Paused, &true);
 
@@ -114,7 +123,6 @@ pub fn do_unpause(env: &Env, caller: &Address, action: &Symbol) -> Result<(), Ho
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use crate::{CalloraHot, CalloraHotClient, HotError};
     use soroban_sdk::testutils::{Address as _, Ledger as _};
     use soroban_sdk::{Address, Env};
@@ -170,26 +178,36 @@ mod tests {
     fn test_pause_already_paused_returns_error() {
         let (_env, admin, client) = setup_with(60);
         client.pause(&admin);
-        // AlreadyPaused is checked before the cooldown guard; even without
-        // advancing time we get AlreadyPaused, not CooldownActive.
+        // AlreadyPaused is the only pause-specific error; CooldownActive can
+        // never be returned by pause (it has no cooldown gate).
         let res = client.try_pause(&admin);
         assert_eq!(res, Err(Ok(HotError::AlreadyPaused)));
     }
 
+    /// pause must succeed immediately after unpause, even while the unpause
+    /// cooldown window is still active.
     #[test]
-    fn test_pause_blocked_by_cooldown() {
+    fn test_pause_succeeds_immediately_after_unpause_no_time_advance() {
+        let (_env, admin, client) = setup_with(300);
+        client.pause(&admin);
+        client.unpause(&admin);
+        // No time has passed — unpause cooldown still armed.
+        // pause must succeed regardless.
+        client.pause(&admin);
+        assert!(client.is_paused());
+    }
+
+    /// Calling pause right after any other admin action (rotate_signer)
+    /// must succeed without any time advance.
+    #[test]
+    fn test_pause_succeeds_after_rotate_with_no_time_advance() {
         let (env, admin, client) = setup_with(300);
-        // Arm the pause cooldown, then clear the paused flag via unpause.
+        let new_signer = Address::generate(&env);
+        // rotate_signer arms the rotate cooldown.
+        client.rotate_signer(&admin, &new_signer);
+        // pause is unaffected — must succeed immediately.
         client.pause(&admin);
-        client.unpause(&admin);
-        // Advance past both cooldowns (both fired at t=0), then re-arm them.
-        advance(&env, 300);
-        client.pause(&admin);
-        client.unpause(&admin);
-        // Both cooldowns fired at t=300; advance only 299 s — pause still cooling.
-        advance(&env, 299);
-        let res = client.try_pause(&admin);
-        assert_eq!(res, Err(Ok(HotError::CooldownActive)));
+        assert!(client.is_paused());
     }
 
     // -----------------------------------------------------------------------

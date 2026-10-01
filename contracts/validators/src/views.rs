@@ -19,10 +19,8 @@ pub const CAP_CHECKED_ARITHMETIC: u64 = 1 << 2;
 pub const CAP_RANGE_VALIDATION: u64 = 1 << 3;
 
 /// Bits 4–63 are reserved for future validator capabilities and remain clear.
-pub const ALL_CAPABILITIES: u64 = CAP_STRING_VALIDATION
-    | CAP_AMOUNT_VALIDATION
-    | CAP_CHECKED_ARITHMETIC
-    | CAP_RANGE_VALIDATION;
+pub const ALL_CAPABILITIES: u64 =
+    CAP_STRING_VALIDATION | CAP_AMOUNT_VALIDATION | CAP_CHECKED_ARITHMETIC | CAP_RANGE_VALIDATION;
 
 /// Return the validator capability bitmap.
 ///

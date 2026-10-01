@@ -1,10 +1,17 @@
 import * as doctor from "../scripts/storage-ttl-doctor";
 import { SorobanRpc, xdr, nativeToScVal } from "@stellar/stellar-sdk";
 
+// `Contract` validates the strkey checksum, so fixtures must be real `C...`
+// contract IDs rather than placeholders like "CDVAULT".
+const VAULT_ID = "CCOCOGLMUZSDPZGJ3DBTWZWCVFLYCECJKS5JTGC6JHK3TO4BAHZP4RYH";
+const SETTLEMENT_ID = "CCVRG3ZQFYZDQ2ZJCXDBO2KU2SJ3ATQYG5UKTKWLOLVCMULFZXCWY2LN";
+const POOL_ID = "CCIA6RG5CQCUHYNSLMMCPP4FK4TTMGMXC5EOJZRW4DJWYUOATJ36WAI4";
+
 describe("Storage TTL Doctor Utility Tests", () => {
   let mockExit: jest.SpyInstance;
   let mockLog: jest.SpyInstance;
   let mockSimulateTransaction: jest.SpyInstance;
+  let mockGetLedgerEntries: jest.SpyInstance;
 
   beforeEach(() => {
     mockExit = jest.spyOn(process, "exit").mockImplementation(() => {
@@ -12,12 +19,14 @@ describe("Storage TTL Doctor Utility Tests", () => {
     });
     mockLog = jest.spyOn(console, "log").mockImplementation(() => {});
     mockSimulateTransaction = jest.spyOn(SorobanRpc.Server.prototype, "simulateTransaction");
+    mockGetLedgerEntries = jest.spyOn(SorobanRpc.Server.prototype, "getLedgerEntries");
   });
 
   afterEach(() => {
     mockExit.mockRestore();
     mockLog.mockRestore();
     mockSimulateTransaction.mockRestore();
+    mockGetLedgerEntries.mockRestore();
   });
 
   // 1. CLI argument parsing
@@ -25,18 +34,18 @@ describe("Storage TTL Doctor Utility Tests", () => {
     const args = [
       "--threshold", "1000",
       "--rpc-url", "https://localhost:8000",
-      "--vault-id", "CDVAULT123",
-      "--settlement-id", "CDSETTLEMENT123",
-      "--revenue-pool-id", "CDPOOL123",
+      "--vault-id", VAULT_ID,
+      "--settlement-id", SETTLEMENT_ID,
+      "--revenue-pool-id", POOL_ID,
       "--request-ids", "req1,req2",
       "--developer-addresses", "addr1,addr2"
     ];
     const opts = doctor.parseArgs(args);
     expect(opts.threshold).toBe(1000);
     expect(opts.rpcUrl).toBe("https://localhost:8000");
-    expect(opts.vaultId).toBe("CDVAULT123");
-    expect(opts.settlementId).toBe("CDSETTLEMENT123");
-    expect(opts.revenuePoolId).toBe("CDPOOL123");
+    expect(opts.vaultId).toBe(VAULT_ID);
+    expect(opts.settlementId).toBe(SETTLEMENT_ID);
+    expect(opts.revenuePoolId).toBe(POOL_ID);
     expect(opts.requestIds).toEqual(["req1", "req2"]);
     expect(opts.developerAddresses).toEqual(["addr1", "addr2"]);
   });
@@ -62,20 +71,28 @@ describe("Storage TTL Doctor Utility Tests", () => {
     };
   }
 
+  // Helper to mock a `getLedgerEntries` response with a live TTL.
+  function mockLedgerEntry(liveUntilLedgerSeq: number, latestLedger: number = 0) {
+    return {
+      entries: [{ liveUntilLedgerSeq }],
+      latestLedger
+    };
+  }
+
   // 2. Successful report generation and grouping
   test("Successful report generation aggregates and groups categories correctly", async () => {
     // Set up mock process.argv
     process.argv = [
       "node", "scripts/storage-ttl-doctor.ts",
-      "--vault-id", "CDVAULT",
-      "--settlement-id", "CDSETTLEMENT",
-      "--revenue-pool-id", "CDPOOL"
+      "--vault-id", VAULT_ID,
+      "--settlement-id", SETTLEMENT_ID,
+      "--revenue-pool-id", POOL_ID
     ];
 
     // Mock simulateTransaction responses for all three contracts
     // Vault returns Instance & ProcessedRequest
     // Settlement returns Instance & DeveloperBalance
-    // Pool returns Instance
+    // Pool returns the TTL policy only (no live `ttl` field)
     mockSimulateTransaction
       .mockResolvedValueOnce(mockSuccessfulSim([
         {
@@ -118,11 +135,13 @@ describe("Storage TTL Doctor Utility Tests", () => {
           category: "Instance",
           key_desc: "Instance",
           storage_type: "Instance",
-          ttl: 520000,
           threshold: 50000,
           bump_amount: 100000
         }
       ]));
+
+    // The revenue pool's live TTL comes from the ledger, not from the contract.
+    mockGetLedgerEntries.mockResolvedValueOnce(mockLedgerEntry(520000));
 
     // We expect it to exit with 1 because DeveloperBalance (ttl=45000) is below its threshold (50000)
     await expect(doctor.run()).rejects.toThrow("process.exit called");
@@ -145,11 +164,71 @@ describe("Storage TTL Doctor Utility Tests", () => {
     expect(reportJson.categories.DeveloperBalance.remaining_ttl).toBe(45000);
   });
 
+  // 2b. Revenue pool: policy from the contract, live TTL from the ledger
+  test("Revenue pool reads policy from get_ttl_policy and the live TTL via getLedgerEntries", async () => {
+    process.argv = [
+      "node", "scripts/storage-ttl-doctor.ts",
+      "--revenue-pool-id", POOL_ID
+    ];
+
+    mockSimulateTransaction.mockResolvedValueOnce(mockSuccessfulSim([
+      {
+        category: "Instance",
+        key_desc: "Instance",
+        storage_type: "Instance",
+        threshold: 50000,
+        bump_amount: 100000
+      }
+    ]));
+    // remaining TTL = liveUntilLedgerSeq - latestLedger = 41000 - 1000 = 40000
+    mockGetLedgerEntries.mockResolvedValueOnce(mockLedgerEntry(41000, 1000));
+
+    await expect(doctor.run()).rejects.toThrow("process.exit called");
+    expect(mockExit).toHaveBeenCalledWith(1);
+
+    expect(mockGetLedgerEntries).toHaveBeenCalledTimes(1);
+
+    const reportJson = JSON.parse(mockLog.mock.calls[0][0]) as doctor.DoctorReport;
+    expect(reportJson.errors).toHaveLength(0);
+    expect(reportJson.summary.status).toBe("WARN"); // 40000 < 50000
+    expect(reportJson.categories.Instance.remaining_ttl).toBe(40000);
+    expect(reportJson.categories.Instance.threshold).toBe(50000);
+    expect(reportJson.categories.Instance.bump_amount).toBe(100000);
+  });
+
+  // 2c. Revenue pool: no live TTL in the ledger entry is an error, not a guess
+  test("Revenue pool without liveUntilLedgerSeq is reported as an error", async () => {
+    process.argv = [
+      "node", "scripts/storage-ttl-doctor.ts",
+      "--revenue-pool-id", POOL_ID
+    ];
+
+    mockSimulateTransaction.mockResolvedValueOnce(mockSuccessfulSim([
+      {
+        category: "Instance",
+        key_desc: "Instance",
+        storage_type: "Instance",
+        threshold: 50000,
+        bump_amount: 100000
+      }
+    ]));
+    // Entry present but with no liveUntilLedgerSeq → remaining TTL is unknown.
+    mockGetLedgerEntries.mockResolvedValueOnce({ entries: [{}], latestLedger: 1000 });
+
+    await expect(doctor.run()).rejects.toThrow("process.exit called");
+    expect(mockExit).toHaveBeenCalledWith(1);
+
+    const reportJson = JSON.parse(mockLog.mock.calls[0][0]) as doctor.DoctorReport;
+    expect(reportJson.summary.status).toBe("ERROR");
+    expect(reportJson.errors.some(e => e.includes("liveUntilLedgerSeq"))).toBe(true);
+    expect(reportJson.categories.Instance.status).toBe("EMPTY");
+  });
+
   // 3. Threshold handling (custom CLI threshold)
   test("Custom CLI threshold overrides default entry threshold", async () => {
     process.argv = [
       "node", "scripts/storage-ttl-doctor.ts",
-      "--vault-id", "CDVAULT",
+      "--vault-id", VAULT_ID,
       "--threshold", "40000" // Lower than the entry threshold of 50000
     ];
 
@@ -178,7 +257,7 @@ describe("Storage TTL Doctor Utility Tests", () => {
   test("Handles empty categories gracefully", async () => {
     process.argv = [
       "node", "scripts/storage-ttl-doctor.ts",
-      "--vault-id", "CDVAULT"
+      "--vault-id", VAULT_ID
     ];
 
     // Vault returns instance TTL only, processed request is empty
@@ -205,7 +284,7 @@ describe("Storage TTL Doctor Utility Tests", () => {
   test("Gracefully handles simulation errors or missing values", async () => {
     process.argv = [
       "node", "scripts/storage-ttl-doctor.ts",
-      "--vault-id", "CDVAULT"
+      "--vault-id", VAULT_ID
     ];
 
     // Mock simulateTransaction returning a simulation error

@@ -245,10 +245,12 @@ fn benchmark_scenarios_execute_successfully() {
 #[test]
 fn add_address_requires_auth() {
     let env = Env::default();
+    env.mock_all_auths();
     let admin = Address::generate(&env);
     let address = Address::generate(&env);
     let client = deploy(&env, &admin);
 
+    env.set_auths(&[]);
     assert!(client.try_add_address(&admin, &address).is_err());
     assert!(client.get_whitelist().is_empty());
 }
@@ -256,11 +258,13 @@ fn add_address_requires_auth() {
 #[test]
 fn remove_address_requires_auth() {
     let env = Env::default();
+    env.mock_all_auths();
     let admin = Address::generate(&env);
     let address = Address::generate(&env);
     let (contract_id, client) = deploy_with_id(&env, &admin);
     seed_member(&env, &contract_id, &address);
 
+    env.set_auths(&[]);
     assert!(client.is_whitelisted(&address));
     assert!(client.try_remove_address(&admin, &address).is_err());
     assert!(client.is_whitelisted(&address));
@@ -269,11 +273,13 @@ fn remove_address_requires_auth() {
 #[test]
 fn clear_all_requires_auth() {
     let env = Env::default();
+    env.mock_all_auths();
     let admin = Address::generate(&env);
     let address = Address::generate(&env);
     let (contract_id, client) = deploy_with_id(&env, &admin);
     seed_member(&env, &contract_id, &address);
 
+    env.set_auths(&[]);
     assert!(client.is_whitelisted(&address));
     assert!(client.try_clear_all(&admin).is_err());
     assert!(client.is_whitelisted(&address));

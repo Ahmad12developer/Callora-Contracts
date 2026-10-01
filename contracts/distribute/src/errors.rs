@@ -12,8 +12,8 @@ use soroban_sdk::contracterror;
 /// | 2    | AlreadyInitialized       | `init` was called more than once                   |
 /// | 3    | Unauthorized             | Caller is not the admin or authorized caller       |
 /// | 4    | Paused                   | Contract is currently paused                       |
-/// | 5    | AccountLimitExceeded     | Account would exceed per-account state cap         |
-/// | 6    | AccountStateEmpty        | Cannot close a state entry that does not exist     |
+/// | 5    | AccountLimitExceeded     | Reserved legacy code; not emitted by entrypoints   |
+/// | 6    | AccountStateEmpty        | Reserved legacy code; not emitted by entrypoints   |
 /// | 7    | BatchEmpty               | Batch operation received an empty items list       |
 /// | 8    | BatchTooLarge            | Batch exceeds `MAX_BATCH_SIZE`                     |
 /// | 9    | Overflow                 | Arithmetic overflow detected                       |
@@ -32,9 +32,9 @@ pub enum DistributeError {
     Unauthorized = 3,
     /// Contract is currently paused (code 4).
     Paused = 4,
-    /// Account would exceed the per-account state cap (code 5).
+    /// Reserved legacy state-counter error (code 5); retained for code stability.
     AccountLimitExceeded = 5,
-    /// Cannot close a state entry that does not exist â€” count is zero (code 6).
+    /// Reserved legacy state-counter error (code 6); retained for code stability.
     AccountStateEmpty = 6,
     /// Batch operation received an empty items list (code 7).
     BatchEmpty = 7,

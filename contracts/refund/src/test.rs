@@ -2,7 +2,7 @@
 
 use crate::{
     InitializedEvent, RefundConfigUpdatedEvent, RefundContract, RefundContractClient, RefundError,
-    RefundProcessedEvent, RefundRequestedEvent, RefundStatus,
+    RefundProcessedEvent, RefundRequestedEvent, RefundStatus, MAX_REQUESTER_REFUNDS,
 };
 use soroban_sdk::testutils::{Address as _, Events as _, Ledger};
 use soroban_sdk::{Address, Env, IntoVal, Symbol};
@@ -88,6 +88,42 @@ fn test_request_refund() {
     assert_eq!(request.token, token);
     assert_eq!(request.amount, 500);
     assert_eq!(request.status, RefundStatus::Pending);
+}
+
+#[test]
+fn test_requester_refund_index_is_paginated_in_creation_order() {
+    let (env, _admin, client) = setup();
+    let requester = Address::generate(&env);
+    let token = Address::generate(&env);
+
+    let first = client.request_refund(&requester, &token, &500, &Symbol::new(&env, "one"));
+    let second = client.request_refund(&requester, &token, &600, &Symbol::new(&env, "two"));
+    let third = client.request_refund(&requester, &token, &700, &Symbol::new(&env, "three"));
+
+    let first_page = client.get_refunds_by_requester(&requester, &0, &2);
+    assert_eq!(first_page.len(), 2);
+    assert_eq!(first_page.get(0).unwrap(), first);
+    assert_eq!(first_page.get(1).unwrap(), second);
+
+    let second_page = client.get_refunds_by_requester(&requester, &2, &50);
+    assert_eq!(second_page.len(), 1);
+    assert_eq!(second_page.get(0).unwrap(), third);
+}
+
+#[test]
+fn test_requester_refund_index_is_bounded() {
+    let (env, _admin, client) = setup();
+    let requester = Address::generate(&env);
+    let token = Address::generate(&env);
+
+    for _ in 0..(MAX_REQUESTER_REFUNDS + 1) {
+        client.request_refund(&requester, &token, &500, &Symbol::new(&env, "test"));
+    }
+
+    let oversized_limit = MAX_REQUESTER_REFUNDS + 1;
+    let page = client.get_refunds_by_requester(&requester, &0, &oversized_limit);
+    assert_eq!(page.len(), MAX_REQUESTER_REFUNDS.min(crate::MAX_REQUESTER_REFUNDS_PAGE_SIZE));
+    assert_eq!(page.get(0).unwrap(), 2);
 }
 
 #[test]

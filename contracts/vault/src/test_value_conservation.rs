@@ -22,7 +22,7 @@
 
 extern crate std;
 
-use soroban_sdk::testutils::{Address as _, Ledger as _};
+use soroban_sdk::testutils::{Address as _, Events as _, Ledger as _};
 use soroban_sdk::{token, Address, Env, Error, InvokeError, Vec};
 
 use super::*;
@@ -345,14 +345,15 @@ fn deduct_without_settlement_returns_error_before_mutation() {
     let env = Env::default();
     let (client, owner, usdc) = setup_vault_with_optional_settlement(&env, None);
     env.mock_all_auths();
-    let event_count = env.events().all().len();
 
     let result = client.try_deduct(&owner, &100i128, &1u64);
 
     assert!(is_vault_err(result, VaultError::SettlementNotSet as u32));
     assert_eq!(client.balance(), 1_000);
     assert_eq!(usdc.balance(&client.address), 1_000);
-    assert_eq!(env.events().all().len(), event_count);
+    // A failed top-level invocation rolls the event buffer back; no vault
+    // event may survive it.
+    assert!(env.events().all().is_empty());
 }
 
 #[test]
@@ -360,7 +361,6 @@ fn batch_deduct_without_settlement_returns_error_before_mutation() {
     let env = Env::default();
     let (client, owner, usdc) = setup_vault_with_optional_settlement(&env, None);
     env.mock_all_auths();
-    let event_count = env.events().all().len();
     let items = items_from(&env, &[100]);
 
     let result = client.try_batch_deduct(&owner, &items);
@@ -368,15 +368,16 @@ fn batch_deduct_without_settlement_returns_error_before_mutation() {
     assert!(is_vault_err(result, VaultError::SettlementNotSet as u32));
     assert_eq!(client.balance(), 1_000);
     assert_eq!(usdc.balance(&client.address), 1_000);
-    assert_eq!(env.events().all().len(), event_count);
+    // A failed top-level invocation rolls the event buffer back; no vault
+    // event may survive it.
+    assert!(env.events().all().is_empty());
 }
 
 #[test]
 fn deduct_and_batch_deduct_without_usdc_return_not_initialized() {
     let env = Env::default();
     let settlement = Address::generate(&env);
-    let (client, owner, usdc) =
-        setup_vault_with_optional_settlement(&env, Some(settlement));
+    let (client, owner, usdc) = setup_vault_with_optional_settlement(&env, Some(settlement));
     env.as_contract(&client.address, || {
         env.storage().instance().remove(&DataKey::UsdcToken);
     });

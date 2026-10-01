@@ -23,18 +23,24 @@
 //!
 //! ## Events
 //!
-//! | Entrypoint       | Topic               | Data                          |
-//! |------------------|---------------------|-------------------------------|
-//! | `init`           | `"topics_init"`     | `admin: Address`              |
-//! | `register_topic` | `"topic_registered"`| `TopicRecord`                 |
-//! | `deactivate`     | `"topic_deactivated"`| `topic_name: Symbol`         |
+//! | Entrypoint        | Topic                  | Data                               |
+//! |-------------------|------------------------|------------------------------------|
+//! | `init`            | `"topics_init"`        | `admin: Address`                   |
+//! | `register_topic`  | `"topic_registered"`   | `TopicRecord`                      |
+//! | `deactivate`      | `"topic_deactivated"`  | `topic_name: Symbol`               |
+//! | `reactivate`      | `"topic_reactivated"`  | `topic_name: Symbol`               |
+//! | `set_topic_owner` | `"topic_owner_chg"`    | `(old_owner, new_owner, name)`     |
 
 pub mod errors;
 pub mod events;
 
 pub use errors::TopicsError;
 
+#[cfg(test)]
+mod test_lifecycle;
+
 use soroban_sdk::{contract, contractimpl, contracttype, Address, Env, String, Symbol};
+use callora_validators::normalize_visible_ascii;
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -131,6 +137,8 @@ impl CalloraTopics {
     /// - [`TopicsError::NotInitialized`] if `init` has not been called.
     /// - [`TopicsError::Unauthorized`] if `caller` is not the admin.
     /// - [`TopicsError::TopicAlreadyExists`] if `name` is already registered.
+    /// - [`TopicsError::InvalidDescription`] if `description` is empty, exceeds
+    ///   256 bytes, contains control characters, or has leading/trailing whitespace.
     pub fn register_topic(
         env: Env,
         caller: Address,
@@ -148,6 +156,13 @@ impl CalloraTopics {
         if env.storage().persistent().has(&key) {
             return Err(TopicsError::TopicAlreadyExists);
         }
+
+        // Reject descriptions that are empty, exceed 256 bytes, contain C0/DEL
+        // control characters, or have leading / trailing whitespace.  This
+        // prevents oversized payloads from inflating storage and event costs
+        // and makes the on-chain description byte-stable visible ASCII.
+        normalize_visible_ascii(&description)
+            .map_err(|_| TopicsError::InvalidDescription)?;
 
         let record = TopicRecord {
             name: name.clone(),
@@ -182,6 +197,7 @@ impl CalloraTopics {
     /// - [`TopicsError::NotInitialized`] if `init` has not been called.
     /// - [`TopicsError::Unauthorized`] if `caller` is not the admin.
     /// - [`TopicsError::TopicNotFound`] if `name` was never registered.
+    /// - [`TopicsError::TopicAlreadyInactive`] if the topic is already inactive.
     pub fn deactivate(env: Env, caller: Address, name: Symbol) -> Result<(), TopicsError> {
         caller.require_auth();
         let admin = Self::require_admin(&env)?;
@@ -196,11 +212,88 @@ impl CalloraTopics {
             .get(&key)
             .ok_or(TopicsError::TopicNotFound)?;
 
+        if !record.active {
+            return Err(TopicsError::TopicAlreadyInactive);
+        }
+
         record.active = false;
         env.storage().persistent().set(&key, &record);
         Self::bump_instance(&env);
         env.events()
             .publish((events::event_topic_deactivated(&env),), name);
+        Ok(())
+    }
+
+    /// Reactivate a previously deactivated topic, allowing metered calls again.
+    ///
+    /// Only the admin may reactivate topics.
+    ///
+    /// # Errors
+    /// - [`TopicsError::NotInitialized`] if `init` has not been called.
+    /// - [`TopicsError::Unauthorized`] if `caller` is not the admin.
+    /// - [`TopicsError::TopicNotFound`] if `name` was never registered.
+    pub fn reactivate(env: Env, caller: Address, name: Symbol) -> Result<(), TopicsError> {
+        caller.require_auth();
+        let admin = Self::require_admin(&env)?;
+        if caller != admin {
+            return Err(TopicsError::Unauthorized);
+        }
+
+        let key = StorageKey::Topic(name.clone());
+        let mut record: TopicRecord = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .ok_or(TopicsError::TopicNotFound)?;
+
+        record.active = true;
+        env.storage().persistent().set(&key, &record);
+        Self::bump_instance(&env);
+        env.events()
+            .publish((events::event_topic_reactivated(&env),), name);
+        Ok(())
+    }
+
+    /// Transfer ownership of a registered topic to a new address.
+    ///
+    /// Only the admin may change topic ownership.
+    ///
+    /// # Errors
+    /// - [`TopicsError::NotInitialized`] if `init` has not been called.
+    /// - [`TopicsError::Unauthorized`] if `caller` is not the admin.
+    /// - [`TopicsError::TopicNotFound`] if `name` was never registered.
+    /// - [`TopicsError::SameOwner`] if `new_owner` equals the current owner.
+    pub fn set_topic_owner(
+        env: Env,
+        caller: Address,
+        name: Symbol,
+        new_owner: Address,
+    ) -> Result<(), TopicsError> {
+        caller.require_auth();
+        let admin = Self::require_admin(&env)?;
+        if caller != admin {
+            return Err(TopicsError::Unauthorized);
+        }
+
+        let key = StorageKey::Topic(name.clone());
+        let mut record: TopicRecord = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .ok_or(TopicsError::TopicNotFound)?;
+
+        if record.owner == new_owner {
+            return Err(TopicsError::SameOwner);
+        }
+
+        let old_owner = record.owner.clone();
+        record.owner = new_owner.clone();
+        env.storage().persistent().set(&key, &record);
+        Self::bump_instance(&env);
+        env.events().publish(
+            (events::event_topic_owner_changed(&env),),
+            (old_owner, new_owner, name),
+        );
         Ok(())
     }
 

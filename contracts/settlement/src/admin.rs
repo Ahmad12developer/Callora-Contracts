@@ -94,12 +94,16 @@ pub(crate) fn execute_balance_migration(env: &Env, caller: &Address, from: &Addr
     env.storage()
         .persistent()
         .set(&destination_key, &new_destination_balance);
-    env.storage()
-        .persistent()
-        .extend_ttl(&source_key, 50_000, 50_000);
-    env.storage()
-        .persistent()
-        .extend_ttl(&destination_key, 50_000, 50_000);
+    env.storage().persistent().extend_ttl(
+        &source_key,
+        crate::types::PERSISTENT_BUMP_THRESHOLD,
+        crate::types::PERSISTENT_BUMP_AMOUNT,
+    );
+    env.storage().persistent().extend_ttl(
+        &destination_key,
+        crate::types::PERSISTENT_BUMP_THRESHOLD,
+        crate::types::PERSISTENT_BUMP_AMOUNT,
+    );
 
     let mut index: Vec<Address> = env
         .storage()

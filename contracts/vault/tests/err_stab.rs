@@ -14,7 +14,7 @@ use std::collections::BTreeSet;
 /// Every variant is paired with its **stable numeric discriminant**.  If a
 /// discriminant changes (accidentally or intentionally), this test fails
 /// with a diff-friendly message identifying the regressed variant.
-const FROZEN_ERROR_SNAPSHOT: [(u32, VaultError); 46] = [
+const FROZEN_ERROR_SNAPSHOT: [(u32, VaultError); 49] = [
     (1, VaultError::NotInitialized),
     (2, VaultError::AlreadyInitialized),
     (3, VaultError::Unauthorized),
@@ -65,6 +65,9 @@ const FROZEN_ERROR_SNAPSHOT: [(u32, VaultError); 46] = [
     (53, VaultError::TimelockOverflow),
     (54, VaultError::InvalidTimelockWindow),
     (55, VaultError::BelowMinTransferAmount),
+    (56, VaultError::SettlementCannotBeVault),
+    (57, VaultError::SettlementCannotBeToken),
+    (58, VaultError::ProposalExpired),
 ];
 
 /// Verify every error code in the snapshot maps to the expected discriminant.
@@ -367,4 +370,10 @@ fn test_invalid_timelock_window_is_code_54() {
 #[test]
 fn test_below_min_transfer_amount_is_code_55() {
     assert_eq!(VaultError::BelowMinTransferAmount as u32, 55);
+}
+
+/// Verify `ProposalExpired` still has discriminant 58.
+#[test]
+fn test_proposal_expired_is_code_56() {
+    assert_eq!(VaultError::ProposalExpired as u32, 58);
 }

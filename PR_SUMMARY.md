@@ -277,3 +277,5 @@ cargo build --target wasm32-unknown-unknown --release -p callora-vault
 3. Deploy to testnet for integration testing
 4. Update client SDKs with new functions
 5. Notify integrators of new allowlist management functions
+
+...

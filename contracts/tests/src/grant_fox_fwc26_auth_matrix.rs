@@ -419,7 +419,7 @@ mod vault {
         let env = Env::default();
         env.mock_all_auths();
         let ctx = setup(&env);
-        let ids: Vec<Symbol> = Vec::new(&ctx.env);
+        let ids: Vec<u64> = Vec::new(&ctx.env);
         assert!(ctx
             .vault
             .try_prune_processed_requests(&ctx.owner, &ids)
@@ -431,7 +431,7 @@ mod vault {
         let env = Env::default();
         env.mock_all_auths();
         let ctx = setup(&env);
-        let ids: Vec<Symbol> = Vec::new(&ctx.env);
+        let ids: Vec<u64> = Vec::new(&ctx.env);
         ctx.env.set_auths(&[]);
         assert!(ctx
             .vault

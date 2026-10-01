@@ -50,6 +50,14 @@ use soroban_sdk::contracterror;
 /// | 40   | InvalidVault                 | Vault address is invalid                             |
 /// | 41   | NoVaultRotationPending       | No vault rotation is pending                         |
 /// | 42   | BroadcastMessageTooLong      | Admin broadcast message exceeds the maximum length   |
+/// | 43   | CrossTenantBatch             | Batch settlement mixes developers from different tenants |
+/// | 44   | NoUpgradePending             | No upgrade proposal is currently pending             |
+/// | 45   | ZeroWasmHash                 | Proposed WASM hash is all-zero (rejected)            |
+/// | 46   | UpgradeTimelockNotExpired    | Upgrade timelock delay has not yet elapsed           |
+/// | 47   | UnsupportedToken             | Token is not enabled for settlement payments         |
+/// | 48   | DuplicateRequestId           | Deduction request ID has already been recorded       |
+/// | 49   | LengthMismatch               | Paired batch vectors have different lengths          |
+/// | 50   | InvalidCursor                | Batch cursor is past the end or the limit is zero    |
 #[contracterror]
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[repr(u32)]
@@ -101,4 +109,20 @@ pub enum SettlementError {
     NoVaultRotationPending = 41,
     /// Admin broadcast message exceeds the maximum allowed length.
     BroadcastMessageTooLong = 42,
+    /// Batch settlement mixes developers from different tenants.
+    CrossTenantBatch = 43,
+    /// No upgrade proposal is currently pending.
+    NoUpgradePending = 44,
+    /// Proposed WASM hash is all-zero bytes (rejected as invalid).
+    ZeroWasmHash = 45,
+    /// Upgrade timelock delay has not yet elapsed.
+    UpgradeTimelockNotExpired = 46,
+    /// Token is not enabled for settlement payments.
+    UnsupportedToken = 47,
+    /// Deduction request ID has already been recorded.
+    DuplicateRequestId = 48,
+    /// #1135: `developers.len() != amounts.len()` in a paired batch.
+    LengthMismatch = 49,
+    /// #1135: `cursor > developers.len()` or `limit == 0`.
+    InvalidCursor = 50,
 }

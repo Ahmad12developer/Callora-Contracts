@@ -174,7 +174,7 @@ The Callora Revenue Pool contract processes USDC distribution to developer walle
 
 **Read-only entrypoints** (`get_admin`, `get_usdc_token`, `get_pending_admin`,
 `get_pause_guardian`, `is_paused`, `get_cumulative_yield_deposited`,
-`get_max_distribute`, `balance`, `get_version`, `version`, `get_storage_ttl`,
+`get_max_distribute`, `balance`, `get_version`, `version`, `get_ttl_policy`,
 `get_pending_emergency_drain`, `chunk_iter`) do **not** require auth and are
 callable by anyone.
 

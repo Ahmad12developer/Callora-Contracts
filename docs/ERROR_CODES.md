@@ -112,6 +112,14 @@ must not be reassigned once released.
 | 40 | `InvalidVault` | Settlement | Vault address is invalid |
 | 41 | `NoVaultRotationPending` | Settlement | No vault rotation is pending |
 | 42 | `BroadcastMessageTooLong` | Settlement | Admin broadcast message exceeds the maximum length |
+| 43 | `CrossTenantBatch` | Settlement | Batch settlement mixed multiple developers |
+| 44 | `NoUpgradePending` | Settlement | No upgrade proposal is currently pending |
+| 45 | `ZeroWasmHash` | Settlement | Proposed WASM hash is all-zero (rejected) |
+| 46 | `UpgradeTimelockNotExpired` | Settlement | Upgrade timelock delay has not yet elapsed |
+| 47 | `UnsupportedToken` | Settlement | Token is not enabled for settlement payments |
+| 48 | `DuplicateRequestId` | Settlement | Deduction request ID has already been recorded |
+| 49 | `LengthMismatch` | Settlement | Paired batch vectors have different lengths |
+| 50 | `InvalidCursor` | Settlement | Batch cursor is past the end or the limit is zero |
 
 ## Revenue Pool
 
@@ -163,6 +171,8 @@ must not be reassigned once released.
 | 14 | `MigrationSameAddress` | Upgrade | Target migration contract address matches source |
 | 15 | `InvalidMigrationTarget` | Upgrade | Target migration contract address is invalid |
 | 16 | `NoUpgradePending` | Upgrade | No pending upgrade was found to execute or cancel |
+| 17 | `CooldownNotElapsed` | Upgrade | The cooldown period for upgrades has not yet elapsed |
+| 18 | `InvalidCooldown` | Upgrade | Requested cooldown is outside `MIN_COOLDOWN_SECONDS..=MAX_COOLDOWN_SECONDS` |
 
 ## Freeze
 
@@ -174,5 +184,18 @@ must not be reassigned once released.
 | 4 | `AlreadyFrozen` | Freeze | Contract is already frozen |
 | 5 | `NotFrozen` | Freeze | Contract is not currently frozen |
 | 6 | `Overflow` | Freeze | Arithmetic overflow detected |
+
+## Errors
+
+| Code | Variant | Contract | Meaning |
+|------|---------|----------|---------|
+| 1 | `NotInitialized` | Errors | `register_error` / `update_error` was called before `init` |
+| 2 | `AlreadyInitialized` | Errors | `init` was called more than once |
+| 3 | `Unauthorized` | Errors | Caller is not the stored admin |
+| 4 | `Overflow` | Errors | `log_error` received `u32::MAX`; checked arithmetic refused to increment |
+| 5 | `UnknownErrorCode` | Errors | `log_error` was called with a code that `register_error` never defined |
+| 6 | `DescriptionTooLong` | Errors | Description exceeds `MAX_DESC_LEN` (256 bytes) on `register_error` or `update_error` |
+| 7 | `AlreadyRegistered` | Errors | The code is already registered; use `update_error` to change its description |
+| 8 | `NotRegistered` | Errors | `update_error` was called for a code that was never registered |
 
 

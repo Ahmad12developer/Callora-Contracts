@@ -1,7 +1,7 @@
 extern crate std;
 
 use super::*;
-use soroban_sdk::{token, Address, Env};
+use soroban_sdk::{Address, Env};
 
 fn create_usdc<'a>(env: &'a Env, admin: &'a Address) -> Address {
     let ca = env.register_stellar_asset_contract_v2(admin.clone());
@@ -56,7 +56,7 @@ fn fuzz_like_set_authorized_caller_auth_and_nonce_invariants() {
                 }
 
                 if set_to_vault_address {
-                    assert_eq!(result, Err(Ok(VaultError::AuthorizedCallerCannotBeVault);
+                    assert_eq!(result, Err(Ok(VaultError::AuthorizedCallerCannotBeVault)));
                     assert_eq!(after_meta.authorized_caller, before_meta.authorized_caller);
                     assert_eq!(after_nonce, before_nonce);
                     continue;
@@ -66,7 +66,7 @@ fn fuzz_like_set_authorized_caller_auth_and_nonce_invariants() {
                     assert!(result.is_ok());
                     assert_eq!(after_nonce, before_nonce.wrapping_add(1));
                 } else {
-                    assert_eq!(result, Err(Ok(VaultError::StaleNonce);
+                    assert_eq!(result, Err(Ok(VaultError::StaleNonce)));
                     assert_eq!(after_nonce, before_nonce);
                 }
             }

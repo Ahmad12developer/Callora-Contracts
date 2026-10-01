@@ -353,8 +353,8 @@ fn prune_works_during_recovery_mode() {
     // to simulate a previously-processed deduct.  We do this because
     // the current `deduct` implementation doesn't store markers via
     // `mark_request_processed`; we only need the marker to test pruning.
-    let rid = Symbol::new(&env, "req_prune");
-    let key = StorageKey::ProcessedRequest(rid.clone());
+    let rid: u64 = 42;
+    let key = StorageKey::ProcessedRequest(rid);
     env.as_contract(&vault_addr, || {
         env.storage().persistent().set(&key, &true);
         env.storage()
@@ -369,7 +369,7 @@ fn prune_works_during_recovery_mode() {
 
     // Prune should still work during pause (recovery mode)
     let mut ids = soroban_sdk::Vec::new(&env);
-    ids.push_back(rid.clone());
+    ids.push_back(rid);
     client.prune_processed_requests(&owner, &ids);
     assert!(!client.is_request_processed(&rid));
 }

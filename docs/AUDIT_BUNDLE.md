@@ -16,7 +16,7 @@ cargo build
 cargo test
 
 # Generate coverage report (requires cargo-tarpaulin)
-./scripts/coverage.sh
+//scripts/coverage.sh
 
 # Build WASM binaries for deployment
 cargo build --target wasm32-unknown-unknown --release -p callora-vault
@@ -44,7 +44,7 @@ Callora Contracts is a Soroban (Stellar) smart contract suite for an API marketp
    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
    ```
 
-2. **Soroban CLI** (for deployment testing)
+2. **Soroban CLI*** (for deployment testing)
    ```bash
    cargo install soroban-cli
    ```
@@ -104,9 +104,9 @@ Soroban enforces a 64KB limit on contract size. Verify compliance:
 
 ```bash
 # Automated size check for vault contract
-./scripts/check-wasm-size.sh
+//scripts/check-wasm-size.sh
 
-# Manual verification
+# Manual verificationls
 ls -la target/wasm32-unknown-unknown/release/*.wasm
 ```
 
@@ -143,7 +143,7 @@ The project enforces **95% minimum line coverage** on all code.
 
 ```bash
 # Automated coverage with enforcement
-./scripts/coverage.sh
+//scripts/coverage.sh
 
 # Manual coverage generation
 cargo tarpaulin
@@ -167,7 +167,7 @@ Reports are generated in the `coverage/` directory:
 #### Unit Tests
 - Located in `contracts/*/src/test.rs`
 - Cover all public functions and edge cases
-- Include panic scenarios with `#[should_panic]`
+- Include panic scenarios with `#[sould_panic]`
 - Test arithmetic overflow/underflow conditions
 
 #### Integration Tests
@@ -325,155 +325,4 @@ When reviewing pull requests that affect security-sensitive areas, auditors shou
 ### Documentation
 - [ ] **Security Checklist Updates**: Updated SECURITY.md if needed
 - [ ] **Event Schema Changes**: Updated EVENT_SCHEMA.md for new events
-- [ ] **API Documentation**: Updated function documentation
-
-## Development Workflow
-
-### Pre-commit Checks
-
-Before submitting changes, run:
-
-```bash
-# Format code
-cargo fmt
-
-# Lint with strict settings
-cargo clippy --all-targets --all-features -- -D warnings
-
-# Run all tests
-cargo test
-
-# Verify coverage
-./scripts/coverage.sh
-
-# Check WASM builds
-cargo build --target wasm32-unknown-unknown --release
-./scripts/check-wasm-size.sh
-```
-
-### Branch Strategy
-
-- Use descriptive branch names: `security/fix-overflow-check`, `audit/add-invariant-tests`
-- Keep PRs focused and small for easier review
-- Include security impact assessment in PR descriptions
-
-## Deployment Verification
-
-### WASM Binary Validation
-
-```bash
-# Verify WASM structure
-wasm-objdump -h target/wasm32-unknown-unknown/release/callora_vault.wasm
-
-# Check exports
-wasm-objdump -j Export target/wasm32-unknown-unknown/release/callora_vault.wasm
-
-# Validate size constraints
-./scripts/check-wasm-size.sh
-```
-
-### Soroban Deployment Testing
-
-```bash
-# Deploy to testnet (requires Soroban CLI setup)
-soroban contract deploy \
-  --wasm target/wasm32-unknown-unknown/release/callora_vault.wasm \
-  --source-account <account> \
-  --network testnet
-
-# Initialize contract
-soroban contract invoke \
-  --id <contract-id> \
-  --source-account <account> \
-  --network testnet \
-  -- init \
-  --owner <owner-address> \
-  --usdc_token <usdc-token-address> \
-  --initial_balance 0
-```
-
-## Troubleshooting
-
-### Common Build Issues
-
-#### WASM Target Missing
-```bash
-# Error: target 'wasm32-unknown-unknown' not found
-rustup target add wasm32-unknown-unknown
-```
-
-#### Tarpaulin Installation Issues
-```bash
-# On Ubuntu/Debian
-sudo apt-get install libssl-dev pkg-config
-
-# On macOS
-brew install openssl pkg-config
-```
-
-#### Size Limit Exceeded
-If WASM binary exceeds 64KB:
-1. Review `Cargo.toml` optimization settings
-2. Check for unnecessary dependencies
-3. Consider code refactoring to reduce binary size
-
-### Test Failures
-
-#### Coverage Below Threshold
-```bash
-# Generate detailed coverage report
-cargo tarpaulin --out Html
-# Open coverage/tarpaulin-report.html to identify uncovered lines
-```
-
-#### Arithmetic Overflow in Tests
-- Verify `overflow-checks = true` in Cargo.toml
-- Check test inputs for boundary conditions
-- Ensure proper use of `checked_*` arithmetic operations
-
-## Contact and Support
-
-For questions about the audit process or technical issues:
-
-1. **Repository Issues**: Create GitHub issues for bugs or questions
-2. **Security Concerns**: Follow responsible disclosure in SECURITY.md
-3. **Documentation**: Refer to linked security documents for detailed specifications
-
-## Audit Checklist
-
-Use this checklist to ensure comprehensive audit coverage:
-
-### Pre-Audit Setup
-- [ ] Environment setup complete (Rust, Soroban CLI, cargo-tarpaulin)
-- [ ] Repository cloned and builds successfully
-- [ ] All tests pass locally
-- [ ] Coverage report generated (≥95%)
-- [ ] WASM binaries build and pass size checks
-
-### Code Review
-- [ ] All contracts reviewed for security vulnerabilities
-- [ ] Access control mechanisms validated
-- [ ] Arithmetic operations checked for overflow/underflow
-- [ ] Input validation comprehensive
-- [ ] Event emission complete and accurate
-
-### Testing Review
-- [ ] Test coverage meets requirements
-- [ ] Edge cases and boundary conditions tested
-- [ ] Panic scenarios properly tested
-- [ ] Integration tests cover user flows
-- [ ] Fuzz tests validate invariants
-
-### Documentation Review
-- [ ] Security documentation complete and accurate
-- [ ] Event schema matches implementation
-- [ ] Access control model clearly documented
-- [ ] Invariants mathematically sound
-
-### Deployment Readiness
-- [ ] WASM binaries optimized and under size limits
-- [ ] Deployment procedures documented
-- [ ] Monitoring and alerting considerations addressed
-- [ ] Upgrade and migration paths defined
-
-This audit bundle provides the foundation for a thorough security review of the Callora Contracts codebase. Auditors should use this as a starting point and expand their analysis based on specific security requirements and threat models.
+- [ ] **API Documentation**: Updated function 

@@ -528,3 +528,109 @@ fn emergency_pause_event_excludes_operational_details() {
     assert!(state);
     assert_eq!(event.1.len(), 2);
 }
+
+#[test]
+fn execute_fails_one_second_before_timelock() {
+    let env = Env::default();
+    env.mock_all_auths();
+    env.ledger().set_timestamp(1_700_000_000);
+    let admin = Address::generate(&env);
+    let treasury = Address::generate(&env);
+    let (usdc_address, usdc_client, usdc_admin) = create_usdc(&env, &admin);
+    let (pool, client) = init_pool(&env, &admin, &usdc_address);
+    fund_pool(&usdc_admin, &pool, 10_000);
+
+    let treasury_balance_before = usdc_client.balance(&treasury);
+    let pool_balance_before = usdc_client.balance(&pool);
+
+    client.propose_emergency_drain(&admin, &treasury, &5_000);
+    let execute_after = 1_700_000_000 + emergency::EMERGENCY_DRAIN_TIMELOCK_SECONDS;
+    env.ledger().set_timestamp(execute_after - 1);
+
+    assert_eq!(
+        client.try_execute_emergency_drain(&admin),
+        Err(Ok(RevenuePoolError::TimelockNotExpired.into()))
+    );
+
+    let pending = client.get_pending_emergency_drain().unwrap();
+    assert_eq!(pending.to, treasury);
+    assert_eq!(pending.amount, 5_000);
+    assert_eq!(pending.proposed_at, 1_700_000_000);
+    assert_eq!(pending.execute_after, execute_after);
+    assert_eq!(usdc_client.balance(&treasury), treasury_balance_before);
+    assert_eq!(usdc_client.balance(&pool), pool_balance_before);
+}
+
+#[test]
+fn execute_succeeds_exactly_at_timelock() {
+    let env = Env::default();
+    env.mock_all_auths();
+    env.ledger().set_timestamp(1_700_000_000);
+    let admin = Address::generate(&env);
+    let treasury = Address::generate(&env);
+    let (usdc_address, usdc_client, usdc_admin) = create_usdc(&env, &admin);
+    let (pool, client) = init_pool(&env, &admin, &usdc_address);
+    fund_pool(&usdc_admin, &pool, 10_000);
+
+    let treasury_balance_before = usdc_client.balance(&treasury);
+
+    client.propose_emergency_drain(&admin, &treasury, &5_000);
+    let execute_after = 1_700_000_000 + emergency::EMERGENCY_DRAIN_TIMELOCK_SECONDS;
+    env.ledger().set_timestamp(execute_after);
+
+    assert_eq!(client.try_execute_emergency_drain(&admin), Ok(Ok(())));
+    assert!(client.get_pending_emergency_drain().is_none());
+    assert_eq!(
+        usdc_client.balance(&treasury),
+        treasury_balance_before + 5_000
+    );
+}
+
+#[test]
+fn pending_drain_removed_after_success() {
+    let env = Env::default();
+    env.mock_all_auths();
+    env.ledger().set_timestamp(1_700_000_000);
+    let admin = Address::generate(&env);
+    let treasury = Address::generate(&env);
+    let (usdc_address, usdc_client, usdc_admin) = create_usdc(&env, &admin);
+    let (pool, client) = init_pool(&env, &admin, &usdc_address);
+    fund_pool(&usdc_admin, &pool, 10_000);
+
+    client.propose_emergency_drain(&admin, &treasury, &5_000);
+    let execute_after = 1_700_000_000 + emergency::EMERGENCY_DRAIN_TIMELOCK_SECONDS;
+    env.ledger().set_timestamp(execute_after);
+
+    client.execute_emergency_drain(&admin);
+    assert!(client.get_pending_emergency_drain().is_none());
+    assert_eq!(
+        client.try_execute_emergency_drain(&admin),
+        Err(Ok(RevenuePoolError::NoPendingEmergencyDrain.into()))
+    );
+    assert_eq!(usdc_client.balance(&pool), 5_000);
+    assert_eq!(usdc_client.balance(&treasury), 5_000);
+}
+
+#[test]
+fn cancel_succeeds_after_timelock_before_execution() {
+    let env = Env::default();
+    env.mock_all_auths();
+    env.ledger().set_timestamp(1_700_000_000);
+    let admin = Address::generate(&env);
+    let treasury = Address::generate(&env);
+    let (usdc_address, usdc_client, usdc_admin) = create_usdc(&env, &admin);
+    let (pool, client) = init_pool(&env, &admin, &usdc_address);
+    fund_pool(&usdc_admin, &pool, 10_000);
+
+    let treasury_balance_before = usdc_client.balance(&treasury);
+    let pool_balance_before = usdc_client.balance(&pool);
+
+    client.propose_emergency_drain(&admin, &treasury, &5_000);
+    let execute_after = 1_700_000_000 + emergency::EMERGENCY_DRAIN_TIMELOCK_SECONDS;
+    env.ledger().set_timestamp(execute_after + 1);
+
+    assert_eq!(client.try_cancel_emergency_drain(&admin), Ok(Ok(())));
+    assert!(client.get_pending_emergency_drain().is_none());
+    assert_eq!(usdc_client.balance(&treasury), treasury_balance_before);
+    assert_eq!(usdc_client.balance(&pool), pool_balance_before);
+}

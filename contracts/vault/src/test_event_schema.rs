@@ -284,8 +284,8 @@ fn event_version_shape_set_reserve_cap() {
 fn event_version_shape_request_id_pruned() {
     let env = Env::default();
     let (owner, vault, client, _) = setup_full(&env);
-    let req_id = Symbol::new(&env, "prune1");
-    let key = StorageKey::ProcessedRequest(req_id.clone());
+    let req_id: u64 = 1;
+    let key = StorageKey::ProcessedRequest(req_id);
     env.as_contract(&vault, || {
         env.storage().persistent().set(&key, &true);
     });
@@ -351,11 +351,11 @@ fn lifecycle_all_events_carry_version_topic() {
     assert_vault_events_versioned!(env, vault, "admin_rescue");
 
     // prune_processed_requests (seed a marker manually)
-    let prune_id = Symbol::new(&env, "lc_prune1");
+    let prune_id: u64 = 2;
     env.as_contract(&vault, || {
         env.storage()
             .persistent()
-            .set(&StorageKey::ProcessedRequest(prune_id.clone()), &true);
+            .set(&StorageKey::ProcessedRequest(prune_id), &true);
     });
     client.prune_processed_requests(&owner, &soroban_sdk::vec![&env, prune_id]);
     assert_vault_events_versioned!(env, vault, "prune_processed_requests");

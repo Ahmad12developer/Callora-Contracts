@@ -11,10 +11,11 @@ use soroban_sdk::contracterror;
 /// | 5    | AlreadySettled       | Claim has already been collected                  |
 /// | 6    | InvalidAmount        | Claim amount must be positive                     |
 /// | 7    | Overflow             | Arithmetic overflow in pending-amount accumulation|
-/// | 8    | ClaimIdAlreadyUsed   | The claim identifier has already been consumed    |
+/// | 8    | ClaimIdAlreadyUsed   | Claim id already consumed or cancelled (tombstoned)|
 /// | 9    | ClaimIdMismatch      | Provided claim_id does not match stored record    |
 /// | 10   | InvalidClaimId       | Identifier is malformed (all-zero)                |
 /// | 11   | BatchTooLarge        | Batch exceeds `MAX_PENDING_AMOUNTS` entries       |
+/// | 12   | BatchEmpty           | Batch input must not be empty                     |
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 #[repr(u32)]
@@ -33,7 +34,11 @@ pub enum BatchClaimError {
     InvalidAmount = 6,
     /// Arithmetic overflow in pending-amount accumulation (code 7).
     Overflow = 7,
-    /// The claim identifier has already been consumed; replay rejected (code 8).
+    /// The claim identifier has already been consumed or cancelled; replay
+    /// rejected (code 8).
+    ///
+    /// Cancelled claims leave a tombstone (`ClaimConsumed(id) = true`) so the
+    /// id can never be reissued to the same or any other claimant.
     ClaimIdAlreadyUsed = 8,
     /// The provided claim_id does not match the stored record (code 9).
     ClaimIdMismatch = 9,
@@ -50,4 +55,10 @@ pub enum BatchClaimError {
     /// so an oversized batch fails closed and cheaply instead of running the
     /// ledger out of resources part-way through a settlement.
     BatchTooLarge = 11,
+    /// The batch input is empty (code 12).
+    ///
+    /// Issue #1044: an empty batch is rejected rather than silently succeeding,
+    /// so client bugs surface as errors instead of wasting fees on a no-op
+    /// settlement.
+    BatchEmpty = 12,
 }

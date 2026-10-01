@@ -38,6 +38,22 @@ pub fn event_topic_deactivated(env: &Env) -> Symbol {
     Symbol::new(env, "topic_deactivated")
 }
 
+/// Returns the Symbol for the `"topic_reactivated"` event topic.
+///
+/// Emitted after a previously deactivated topic is reactivated by
+/// [`crate::CalloraTopics::reactivate`].
+pub fn event_topic_reactivated(env: &Env) -> Symbol {
+    Symbol::new(env, "topic_reactivated")
+}
+
+/// Returns the Symbol for the `"topic_owner_changed"` event topic.
+///
+/// Emitted after topic ownership is transferred by
+/// [`crate::CalloraTopics::set_topic_owner`].
+pub fn event_topic_owner_changed(env: &Env) -> Symbol {
+    Symbol::new(env, "topic_owner_chg")
+}
+
 /// Returns the Symbol for the canonical event version marker used by Callora.
 pub fn event_version_v1(env: &Env) -> Symbol {
     Symbol::new(env, "callora.v1")

@@ -24,6 +24,8 @@ use soroban_sdk::contracterror;
 /// | 14   | MigrationSameAddress     | Target migration contract address matches source      |
 /// | 15   | InvalidMigrationTarget   | Target migration contract address is invalid          |
 /// | 16   | NoUpgradePending         | No pending upgrade was found to execute or cancel     |
+/// | 17   | CooldownNotElapsed       | The cooldown period for upgrades has not yet elapsed  |
+/// | 18   | InvalidCooldown          | Requested cooldown is outside the allowed bounds      |
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 #[repr(u32)]
@@ -60,6 +62,11 @@ pub enum UpgradeError {
     InvalidMigrationTarget = 15,
     /// No pending upgrade was found to execute or cancel (code 16).
     NoUpgradePending = 16,
+    /// The cooldown period for upgrades has not yet elapsed (code 17).
+    CooldownNotElapsed = 17,
+    /// The requested cooldown is outside
+    /// `MIN_COOLDOWN_SECONDS..=MAX_COOLDOWN_SECONDS` (code 18).
+    InvalidCooldown = 18,
 }
 
 /// Type alias for client-facing ContractError compatibility.

@@ -14,6 +14,18 @@
 //! | `unfreeze`            | `caller.require_auth()` — admin only |
 //! | `set_freeze_operator` | `caller.require_auth()` — admin only |
 //!
+//! # Events
+//!
+//! Every state-changing entrypoint emits exactly one event. Topic[1] is always
+//! `"callora_v1"` for version filtering.
+//!
+//! | Event topic            | Entrypoint            | Data                                         |
+//! |------------------------|-----------------------|----------------------------------------------|
+//! | `freeze_initialized`   | `init`                | `()`                                         |
+//! | `freeze_set`           | `freeze`              | `FreezeSetEvent { reason, frozen_at }`       |
+//! | `freeze_cleared`       | `unfreeze`            | `()`                                         |
+//! | `freeze_operator_set`  | `set_freeze_operator` | `FreezeOperatorSetEvent { old, new }`        |
+//!
 //! # Fuzzing
 //!
 //! See `fuzz/targets/main.rs` — a `cargo-fuzz` target that feeds malformed
@@ -31,7 +43,10 @@ use alloc::vec::Vec;
 use soroban_sdk::{contract, contractimpl, contracttype, Address, Env, Symbol};
 
 pub mod errors;
+pub mod events;
+
 pub use errors::FreezeError;
+pub use events::{FreezeOperatorSetEvent, FreezeSetEvent};
 
 /// One step in a freeze/unfreeze fuzz sequence.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -101,6 +116,32 @@ pub enum DataKey {
     Admin,
     Frozen,
     FreezeOperator,
+    /// The `Symbol` reason supplied to the last successful `freeze()` call.
+    FreezeReason,
+    /// The ledger timestamp (`env.ledger().timestamp()`) of the last successful
+    /// `freeze()` call.
+    FreezeTimestamp,
+}
+
+// ---------------------------------------------------------------------------
+// View types
+// ---------------------------------------------------------------------------
+
+/// Snapshot returned by [`CalloraFreeze::get_freeze_status`].
+///
+/// Combines the current frozen flag, the persisted reason, and the timestamp
+/// into a single call, avoiding multiple round-trips for off-chain monitors.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FreezeStatus {
+    /// `true` when the circuit-breaker is active.
+    pub frozen: bool,
+    /// The reason label from the last `freeze()` call, or `None` if the
+    /// contract was never frozen or has been unfrozen and the field cleared.
+    pub reason: Option<Symbol>,
+    /// The ledger timestamp of the last `freeze()` call, or `None` if the
+    /// contract was never frozen or has been unfrozen and the field cleared.
+    pub frozen_at: Option<u64>,
 }
 
 // ---------------------------------------------------------------------------
@@ -118,6 +159,8 @@ pub struct CalloraFreeze;
 impl CalloraFreeze {
     /// Initialise the contract with an `admin` address.
     ///
+    /// Emits a `freeze_initialized` event on success.
+    ///
     /// # Arguments
     /// * `admin` — Address authorised to freeze, unfreeze, and set the freeze
     ///   operator.
@@ -131,6 +174,7 @@ impl CalloraFreeze {
         }
         env.storage().instance().set(&DataKey::Admin, &admin);
         env.storage().instance().set(&DataKey::Frozen, &false);
+        events::emit_freeze_initialized(&env, &admin);
         Ok(())
     }
 
@@ -153,35 +197,78 @@ impl CalloraFreeze {
             .unwrap_or(false)
     }
 
+    /// Return a snapshot of the current freeze state, last reason, and
+    /// timestamp in one call.
+    ///
+    /// `reason` and `frozen_at` are populated while the contract is frozen and
+    /// cleared on `unfreeze`. They are both `None` before the first `freeze`
+    /// and after any subsequent `unfreeze`.
+    ///
+    /// # Errors
+    /// * [`FreezeError::NotInitialized`] — `init` has not been called.
+    pub fn get_freeze_status(env: Env) -> Result<FreezeStatus, FreezeError> {
+        if !env.storage().instance().has(&DataKey::Admin) {
+            return Err(FreezeError::NotInitialized);
+        }
+        let frozen = env
+            .storage()
+            .instance()
+            .get::<_, bool>(&DataKey::Frozen)
+            .unwrap_or(false);
+        let reason: Option<Symbol> = env.storage().instance().get(&DataKey::FreezeReason);
+        let frozen_at: Option<u64> = env.storage().instance().get(&DataKey::FreezeTimestamp);
+        Ok(FreezeStatus {
+            frozen,
+            reason,
+            frozen_at,
+        })
+    }
+
     /// Activate the circuit-breaker.
+    ///
+    /// Persists `reason` and the current ledger timestamp, then emits a
+    /// `freeze_set` event.
     ///
     /// The admin or the configured freeze operator may call.
     ///
     /// # Arguments
     /// * `caller` — Must be the admin or freeze operator; must authorise.
-    /// * `_reason` — Opaque label emitted in the event for off-chain indexers.
+    /// * `reason` — Opaque label persisted in storage and emitted in the event
+    ///   for off-chain indexers and the `get_freeze_status` view.
     ///
     /// # Errors
     /// * [`FreezeError::Unauthorized`] — caller is neither admin nor operator.
     /// * [`FreezeError::AlreadyFrozen`] — contract is already frozen.
-    pub fn freeze(env: Env, caller: Address, _reason: Symbol) -> Result<(), FreezeError> {
+    pub fn freeze(env: Env, caller: Address, reason: Symbol) -> Result<(), FreezeError> {
         caller.require_auth();
         let admin = Self::get_admin(env.clone())?;
         let operator: Option<Address> = env.storage().instance().get(&DataKey::FreezeOperator);
 
-        let is_authorized = caller == admin
-            || operator.map_or(false, |op| caller == op);
+        let is_authorized = caller == admin || operator.map_or(false, |op| caller == op);
         if !is_authorized {
             return Err(FreezeError::Unauthorized);
         }
         if Self::is_frozen(env.clone()) {
             return Err(FreezeError::AlreadyFrozen);
         }
+
+        let frozen_at = env.ledger().timestamp();
         env.storage().instance().set(&DataKey::Frozen, &true);
+        env.storage()
+            .instance()
+            .set(&DataKey::FreezeReason, &reason);
+        env.storage()
+            .instance()
+            .set(&DataKey::FreezeTimestamp, &frozen_at);
+
+        events::emit_freeze_set(&env, &caller, reason, frozen_at);
         Ok(())
     }
 
     /// Deactivate the circuit-breaker. Only the admin may call.
+    ///
+    /// Clears the persisted reason and timestamp, then emits a `freeze_cleared`
+    /// event.
     ///
     /// # Errors
     /// * [`FreezeError::Unauthorized`] — caller is not the admin.
@@ -196,6 +283,10 @@ impl CalloraFreeze {
             return Err(FreezeError::NotFrozen);
         }
         env.storage().instance().set(&DataKey::Frozen, &false);
+        env.storage().instance().remove(&DataKey::FreezeReason);
+        env.storage().instance().remove(&DataKey::FreezeTimestamp);
+
+        events::emit_freeze_cleared(&env, &caller);
         Ok(())
     }
 
@@ -206,18 +297,30 @@ impl CalloraFreeze {
     ///
     /// Pass `None` to revoke the operator role.
     ///
+    /// Emits a `freeze_operator_set` event with the previous and new operator
+    /// addresses (either may be `None`).
+    ///
     /// # Errors
     /// * [`FreezeError::Unauthorized`] — caller is not the admin.
-    pub fn set_freeze_operator(env: Env, caller: Address, operator: Option<Address>) -> Result<(), FreezeError> {
+    pub fn set_freeze_operator(
+        env: Env,
+        caller: Address,
+        operator: Option<Address>,
+    ) -> Result<(), FreezeError> {
         caller.require_auth();
         let admin = Self::get_admin(env.clone())?;
         if caller != admin {
             return Err(FreezeError::Unauthorized);
         }
-        match operator {
-            Some(op) => env.storage().instance().set(&DataKey::FreezeOperator, &op),
+
+        let old_operator: Option<Address> = env.storage().instance().get(&DataKey::FreezeOperator);
+
+        match operator.clone() {
+            Some(ref op) => env.storage().instance().set(&DataKey::FreezeOperator, op),
             None => env.storage().instance().remove(&DataKey::FreezeOperator),
         }
+
+        events::emit_freeze_operator_set(&env, &caller, old_operator, operator);
         Ok(())
     }
 

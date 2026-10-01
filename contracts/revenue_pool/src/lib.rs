@@ -54,13 +54,21 @@ pub const MAX_BATCH_SIZE: u32 = 50;
 /// Maximum admin broadcast message length in characters.
 pub const MAX_MESSAGE_LEN: u32 = 256;
 
+/// Number of ledgers in a single day, assuming ~5 s close time.
+pub const LEDGERS_PER_DAY: u32 = 17_280;
+
 /// TTL bump constants for instance storage archival risk mitigation.
-/// Soroban archives ledger entries after ~7 days (631 ledgers) of inactivity.
 ///
-/// - `BUMP_AMOUNT`: extend TTL by 10 000 ledgers (≈16 days)
-/// - `LIFETIME_THRESHOLD`: minimum TTL before triggering a bump (≈1.5 days)
-pub const BUMP_AMOUNT: u32 = 10_000;
-pub const LIFETIME_THRESHOLD: u32 = 1_000;
+/// The revenue pool holds critical operational state (admin, USDC address,
+/// pause flags, pending drain). If the instance entry archives, every call
+/// fails until an explicit restore, which can stall payouts during quiet
+/// periods or incidents. We therefore keep the instance alive for at least
+/// 30 days after any call, matching the vault and settlement contracts.
+///
+/// - `BUMP_AMOUNT`: extend TTL by 30 days of ledgers
+/// - `LIFETIME_THRESHOLD`: minimum TTL before triggering a bump (1 day)
+pub const BUMP_AMOUNT: u32 = LEDGERS_PER_DAY * 30;
+pub const LIFETIME_THRESHOLD: u32 = LEDGERS_PER_DAY;
 
 // ---------------------------------------------------------------------------
 // Auxiliary contract-types
@@ -83,14 +91,21 @@ pub struct AdminBroadcast {
     pub message: String,
 }
 
-/// Remaining storage TTL information for a storage category.
+/// TTL policy (threshold / bump constants) this contract applies to a storage
+/// category.
+///
+/// This deliberately carries **no live-TTL field**. Contract code cannot observe
+/// the remaining TTL of a ledger entry, so any such value would be the
+/// [`BUMP_AMOUNT`] constant mislabelled as a measurement. For live TTLs, read
+/// the ledger entries over Soroban RPC `getLedgerEntries` and compare
+/// `liveUntilLedgerSeq` against the current ledger sequence; see
+/// `docs/STORAGE_TTL_DOCTOR.md` and `scripts/storage-ttl-doctor.ts`.
 #[contracttype]
 #[derive(Clone, Debug, PartialEq)]
-pub struct StorageEntryTtl {
+pub struct TtlPolicy {
     pub category: String,
     pub key_desc: String,
     pub storage_type: String,
-    pub ttl: u32,
     pub threshold: u32,
     pub bump_amount: u32,
 }
@@ -230,8 +245,11 @@ impl RevenuePool {
     /// * [`RevenuePoolError::Unauthorized`] - caller is not the current admin.
     ///
     /// # Events
-    /// Emits `admin_changed` with `(current, new_admin)` and
-    /// `admin_transfer_started` with `new_admin`.
+    /// Emits `admin_transfer_started` with `current` as topic and `new_admin`
+    /// as data. No `admin_changed` event is published while the transfer is
+    /// only pending — the admin does not change until `accept_admin`
+    /// (Issue #1163), so a nomination that is later cancelled never announces
+    /// a change that did not happen.
     pub fn set_admin(env: Env, caller: Address, new_admin: Address) {
         caller.require_auth();
         Self::require_not_emergency_paused(&env);
@@ -242,10 +260,6 @@ impl RevenuePool {
         let inst = env.storage().instance();
         inst.set(&Symbol::new(&env, PENDING_ADMIN_KEY), &new_admin);
         inst.extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
-        env.events().publish(
-            (events::event_admin_changed(&env), current.clone()),
-            (current.clone(), new_admin.clone()),
-        );
         env.events().publish(
             (events::event_admin_transfer_started(&env), current),
             new_admin,
@@ -259,7 +273,11 @@ impl RevenuePool {
     /// * [`RevenuePoolError::Unauthorized`] - caller is not the pending admin.
     ///
     /// # Events
-    /// Emits `admin_transfer_completed` with the new admin as topic.
+    /// Emits `admin_changed` with the previous admin as topic and
+    /// `(previous_admin, new_admin)` as data, followed by
+    /// `admin_transfer_completed` with the new admin as topic.
+    /// Both are published only after the admin slot is updated, so indexers
+    /// observe the change exactly when it happens (Issue #1163).
     pub fn accept_admin(env: Env, caller: Address) {
         caller.require_auth();
         Self::require_not_emergency_paused(&env);
@@ -270,9 +288,14 @@ impl RevenuePool {
         if caller != pending {
             env.panic_with_error(RevenuePoolError::Unauthorized);
         }
+        let previous = Self::admin(&env);
         inst.set(&Symbol::new(&env, ADMIN_KEY), &pending);
         inst.remove(&Symbol::new(&env, PENDING_ADMIN_KEY));
         inst.extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
+        env.events().publish(
+            (events::event_admin_changed(&env), previous.clone()),
+            (previous, pending.clone()),
+        );
         env.events()
             .publish((events::event_admin_transfer_completed(&env), pending), ());
     }
@@ -284,7 +307,8 @@ impl RevenuePool {
     /// * [`RevenuePoolError::Unauthorized`] - caller is not the pending admin.
     ///
     /// # Events
-    /// Emits `admin_transfer_completed` with the new admin as topic.
+    /// Emits `admin_changed` followed by `admin_transfer_completed` with the
+    /// new admin as topic.
     pub fn claim_admin(env: Env, caller: Address) {
         Self::accept_admin(env, caller);
     }
@@ -931,28 +955,29 @@ impl RevenuePool {
     }
 
     // -----------------------------------------------------------------------
-    // Storage TTL introspection
+    // Storage TTL policy introspection
     // -----------------------------------------------------------------------
 
-    /// Return remaining TTL information for each storage category.
-    pub fn get_storage_ttl(env: Env) -> Vec<StorageEntryTtl> {
+    /// Return the TTL policy this contract applies to each storage category.
+    ///
+    /// This view reports **policy constants only** (`threshold` and
+    /// `bump_amount`). Earlier revisions also returned a `ttl` field that was
+    /// the live instance TTL under `cfg(test)` but the constant [`BUMP_AMOUNT`]
+    /// in production builds — a fabricated measurement. Contract code cannot
+    /// observe the remaining TTL of a ledger entry at runtime, so the field was
+    /// removed rather than guessed, and the view was renamed from
+    /// `get_storage_ttl` to `get_ttl_policy` to match what it returns.
+    ///
+    /// For live TTLs, read the ledger entries over Soroban RPC
+    /// `getLedgerEntries` and compare `liveUntilLedgerSeq` against the current
+    /// ledger sequence. See `docs/STORAGE_TTL_DOCTOR.md` and
+    /// `scripts/storage-ttl-doctor.ts`.
+    pub fn get_ttl_policy(env: Env) -> Vec<TtlPolicy> {
         let mut result = Vec::new(&env);
-        let instance_ttl = {
-            #[cfg(any(test, feature = "testutils"))]
-            {
-                use soroban_sdk::testutils::storage::Instance as _;
-                env.storage().instance().get_ttl()
-            }
-            #[cfg(not(any(test, feature = "testutils")))]
-            {
-                BUMP_AMOUNT
-            }
-        };
-        result.push_back(StorageEntryTtl {
+        result.push_back(TtlPolicy {
             category: String::from_str(&env, "Instance"),
             key_desc: String::from_str(&env, "Instance"),
             storage_type: String::from_str(&env, "Instance"),
-            ttl: instance_ttl,
             threshold: LIFETIME_THRESHOLD,
             bump_amount: BUMP_AMOUNT,
         });
@@ -1117,6 +1142,7 @@ impl RevenuePool {
     /// Off-chain monitors and the admin can poll this to verify or cancel a
     /// pending drain before the timelock expires.
     pub fn get_pending_emergency_drain(env: Env) -> Option<PendingEmergencyDrain> {
+        Self::bump_instance_ttl(&env);
         env.storage()
             .instance()
             .get(&Symbol::new(&env, EMERGENCY_DRAIN_KEY))

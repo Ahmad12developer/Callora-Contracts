@@ -29,6 +29,7 @@ mod errors;
 pub use errors::WhitelistError;
 
 pub mod admin;
+pub mod events;
 
 use soroban_sdk::{contract, contractimpl, contracttype, Address, Env, Symbol, Vec};
 
@@ -87,6 +88,7 @@ impl CalloraWhitelist {
     /// # Errors
     /// - [`WhitelistError::AlreadyInitialized`] if `init` has already been called.
     pub fn init(env: Env, admin: Address) -> Result<(), WhitelistError> {
+        admin.require_auth();
         if env.storage().instance().has(&StorageKey::WhitelistOwner) {
             return Err(WhitelistError::AlreadyInitialized);
         }
@@ -99,6 +101,14 @@ impl CalloraWhitelist {
             .set(&StorageKey::WhitelistAdmin, &admin);
 
         Self::bump_instance_ttl(&env);
+        env.events().publish(
+            (
+                events::event_init(&env),
+                events::event_version_v1(&env),
+                admin.clone(),
+            ),
+            admin,
+        );
         Ok(())
     }
 
@@ -147,7 +157,20 @@ impl CalloraWhitelist {
         env.storage()
             .instance()
             .set(&StorageKey::WhitelistPendingAdmin, &new_admin);
+        env.events().publish(
+            (Symbol::new(&env, "admin_nominated"), caller.clone()),
+            new_admin.clone(),
+        );
         Self::bump_instance_ttl(&env);
+        env.events().publish(
+            (
+                events::event_admin_nominated(&env),
+                events::event_version_v1(&env),
+                caller,
+                new_admin.clone(),
+            ),
+            new_admin,
+        );
         Ok(())
     }
 
@@ -169,7 +192,51 @@ impl CalloraWhitelist {
         env.storage()
             .instance()
             .remove(&StorageKey::WhitelistPendingAdmin);
+        env.events().publish(
+            (Symbol::new(&env, "admin_accepted"), new_admin.clone()),
+            new_admin.clone(),
+        );
         Self::bump_instance_ttl(&env);
+        Ok(())
+    }
+
+    /// Cancel a pending admin transfer (current admin only).
+    ///
+    /// Removes any pending admin nomination so a stale nomination cannot be
+    /// accepted later. Emits an `admin_cancelled` event.
+    ///
+    /// # Parameters
+    /// - `caller` — Must be the current admin.
+    ///
+    /// # Errors
+    /// - [`WhitelistError::Unauthorized`] if `caller` is not the admin.
+    /// - [`WhitelistError::NotInitialized`] if the contract has not been initialized.
+    /// - [`WhitelistError::NoAdminTransferPending`] if no admin transfer has been initiated.
+    pub fn cancel_admin_transfer(env: Env, caller: Address) -> Result<(), WhitelistError> {
+        Self::require_admin(&env, &caller)?;
+
+        let pending: Address = env
+            .storage()
+            .instance()
+            .get(&StorageKey::WhitelistPendingAdmin)
+            .ok_or(WhitelistError::NoAdminTransferPending)?;
+
+        env.storage()
+            .instance()
+            .remove(&StorageKey::WhitelistPendingAdmin);
+        env.events().publish(
+            (Symbol::new(&env, "admin_cancelled"), caller.clone()),
+            pending,
+        );
+        Self::bump_instance_ttl(&env);
+        env.events().publish(
+            (
+                events::event_admin_accepted(&env),
+                events::event_version_v1(&env),
+                new_admin.clone(),
+            ),
+            new_admin,
+        );
         Ok(())
     }
 
@@ -192,7 +259,8 @@ impl CalloraWhitelist {
     /// - [`WhitelistError::AdminCooldownActive`] if another action's cool-off is still active.
     /// - [`WhitelistError::AddressAlreadyInWhitelist`] if the address is already whitelisted.
     pub fn add_address(env: Env, caller: Address, address: Address) -> Result<(), WhitelistError> {
-        caller.require_auth();
+        // `require_admin` performs `caller.require_auth()`; authorizing twice in
+        // the same invocation frame is rejected by the host (`Auth::ExistingValue`).
         Self::require_admin(&env, &caller)?;
 
         admin::guard(&env, Symbol::new(&env, "add_address"))?;
@@ -207,12 +275,21 @@ impl CalloraWhitelist {
             return Err(WhitelistError::AddressAlreadyInWhitelist);
         }
 
-        list.push_back(address);
+        list.push_back(address.clone());
         env.storage()
             .instance()
             .set(&StorageKey::WhitelistList, &list);
 
         Self::bump_instance_ttl(&env);
+        env.events().publish(
+            (
+                events::event_address_added(&env),
+                events::event_version_v1(&env),
+                caller,
+                address,
+            ),
+            (),
+        );
         Ok(())
     }
 
@@ -259,6 +336,15 @@ impl CalloraWhitelist {
         }
 
         Self::bump_instance_ttl(&env);
+        env.events().publish(
+            (
+                events::event_address_removed(&env),
+                events::event_version_v1(&env),
+                caller,
+                address,
+            ),
+            (),
+        );
         Ok(())
     }
 
@@ -279,9 +365,23 @@ impl CalloraWhitelist {
 
         admin::guard(&env, Symbol::new(&env, "clear_all"))?;
 
+        let cleared: u32 = env
+            .storage()
+            .instance()
+            .get::<_, Vec<Address>>(&StorageKey::WhitelistList)
+            .map(|list| list.len())
+            .unwrap_or(0);
         env.storage().instance().remove(&StorageKey::WhitelistList);
 
         Self::bump_instance_ttl(&env);
+        env.events().publish(
+            (
+                events::event_whitelist_cleared(&env),
+                events::event_version_v1(&env),
+                caller,
+            ),
+            cleared,
+        );
         Ok(())
     }
 
@@ -352,6 +452,14 @@ impl CalloraWhitelist {
         Self::require_admin(&env, &caller)?;
         admin::set_cooldown(&env, seconds)?;
         Self::bump_instance_ttl(&env);
+        env.events().publish(
+            (
+                events::event_admin_cooldown_set(&env),
+                events::event_version_v1(&env),
+                caller,
+            ),
+            seconds,
+        );
         Ok(())
     }
 
@@ -461,6 +569,7 @@ mod tests {
     #[test]
     fn test_non_admin_cannot_set_admin() {
         let env = Env::default();
+        env.mock_all_auths();
         let admin = Address::generate(&env);
         let intruder = Address::generate(&env);
         let new_admin = Address::generate(&env);
@@ -492,7 +601,10 @@ mod tests {
 
         let client = deploy_whitelist(&env, &admin);
         let result = client.try_accept_admin();
-        assert_eq!(result.unwrap_err(), WhitelistError::NoAdminTransferPending);
+        assert_eq!(
+            result.unwrap_err(),
+            Ok(WhitelistError::NoAdminTransferPending)
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -616,6 +728,7 @@ mod tests {
     #[test]
     fn test_non_admin_cannot_add_address() {
         let env = Env::default();
+        env.mock_all_auths();
         let admin = Address::generate(&env);
         let intruder = Address::generate(&env);
         let addr = Address::generate(&env);

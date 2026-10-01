@@ -21,9 +21,11 @@ use soroban_sdk::{Address, Env};
 use crate::{SettlementError, StorageKey};
 
 /// Persistent TTL parameters – kept in lockstep with the developer-balance
-/// entry TTL (50 000 ledgers live, 50 000 threshold).
-pub const HWM_LIVE: u32 = 50_000;
-pub const HWM_THRESHOLD: u32 = 50_000;
+/// entry TTL (#1131). Aliases of the shared constants so a HWM can never
+/// archive before the balance it protects; losing a HWM would reopen replay
+/// of old ledger sequences. Kept as `pub` names for API compatibility.
+pub const HWM_LIVE: u32 = crate::types::PERSISTENT_BUMP_AMOUNT;
+pub const HWM_THRESHOLD: u32 = crate::types::PERSISTENT_BUMP_THRESHOLD;
 
 /// Validate a settlement claim for `developer`.
 ///
@@ -102,6 +104,7 @@ mod tests {
         let client = CalloraSettlementClient::new(&env, &addr);
         let d = dev(&env);
         let t = token(&env);
+        client.add_supported_token(&_admin, &t);
 
         client.receive_payment(&vault, &100i128, &false, &Some(d.clone()), &t, &10u32);
         assert_eq!(client.get_developer_balance(&d, &t), 100);
@@ -117,6 +120,7 @@ mod tests {
         let client = CalloraSettlementClient::new(&env, &addr);
         let d = dev(&env);
         let t = token(&env);
+        client.add_supported_token(&_admin, &t);
 
         client.receive_payment(&vault, &100i128, &false, &Some(d.clone()), &t, &10u32);
 
@@ -132,6 +136,7 @@ mod tests {
         let client = CalloraSettlementClient::new(&env, &addr);
         let d = dev(&env);
         let t = token(&env);
+        client.add_supported_token(&_admin, &t);
 
         client.receive_payment(&vault, &100i128, &false, &Some(d.clone()), &t, &20u32);
 
@@ -148,6 +153,7 @@ mod tests {
         let d1 = dev(&env);
         let d2 = dev(&env);
         let t = token(&env);
+        client.add_supported_token(&_admin, &t);
 
         client.receive_payment(&vault, &100i128, &false, &Some(d1.clone()), &t, &10u32);
         client.receive_payment(&vault, &200i128, &false, &Some(d2.clone()), &t, &10u32);
@@ -161,15 +167,46 @@ mod tests {
     fn test_hwm_pool_independent() {
         let (env, addr, vault, _admin) = setup();
         let client = CalloraSettlementClient::new(&env, &addr);
+        let d = dev(&env);
         let t = token(&env);
+        client.add_supported_token(&_admin, &t);
 
-        client.receive_payment(&vault, &1000i128, &true, &None, &t, &10u32);
+        // Pool seq advances to 50
+        client.receive_payment(&vault, &1000i128, &true, &None, &t, &50u32);
 
-        let result = client.try_receive_payment(&vault, &500i128, &true, &None, &t, &10u32);
-        assert!(result.is_err(), "equal pool ledger_seq should be rejected");
+        // Developer can still use lower seq 20
+        client.receive_payment(&vault, &100i128, &false, &Some(d.clone()), &t, &20u32);
 
-        client.receive_payment(&vault, &500i128, &true, &None, &t, &20u32);
+        // Developer seq advances to 100
+        client.receive_payment(&vault, &100i128, &false, &Some(d.clone()), &t, &100u32);
+
+        // Pool can still use seq 70 (which is lower than developer's 100, but higher than pool's 50)
+        client.receive_payment(&vault, &500i128, &true, &None, &t, &70u32);
+
         assert_eq!(client.get_global_pool().total_balance, 1500);
+        assert_eq!(client.get_developer_balance(&d, &t), 200);
+    }
+
+    /// Pool payments reject equal and lower sequences.
+    #[test]
+    fn test_hwm_pool_rejects_stale_sequences() {
+        let (env, addr, vault, _admin) = setup();
+        let client = CalloraSettlementClient::new(&env, &addr);
+        let t = token(&env);
+        client.add_supported_token(&_admin, &t);
+
+        client.receive_payment(&vault, &1000i128, &true, &None, &t, &20u32);
+        assert_eq!(client.get_global_pool().total_balance, 1000);
+
+        // Equal sequence fails
+        let result_equal = client.try_receive_payment(&vault, &500i128, &true, &None, &t, &20u32);
+        assert!(result_equal.is_err(), "equal pool ledger_seq should be rejected");
+        assert_eq!(client.get_global_pool().total_balance, 1000, "pool balance unchanged on rejected replay");
+
+        // Lower sequence fails
+        let result_lower = client.try_receive_payment(&vault, &500i128, &true, &None, &t, &10u32);
+        assert!(result_lower.is_err(), "lower pool ledger_seq should be rejected");
+        assert_eq!(client.get_global_pool().total_balance, 1000, "pool balance unchanged on rejected replay");
     }
 
     /// Reorg scenario: same transaction replayed after a reorg that returns to
@@ -180,6 +217,7 @@ mod tests {
         let client = CalloraSettlementClient::new(&env, &addr);
         let d = dev(&env);
         let t = token(&env);
+        client.add_supported_token(&_admin, &t);
 
         client.receive_payment(&vault, &500i128, &false, &Some(d.clone()), &t, &42u32);
         assert_eq!(client.get_developer_balance(&d, &t), 500);
@@ -204,6 +242,7 @@ mod tests {
         let d1 = dev(&env);
         let d2 = dev(&env);
         let t = token(&env);
+        client.add_supported_token(&_admin, &t);
 
         let items = soroban_sdk::vec![&env, (d1.clone(), 100i128), (d2.clone(), 200i128)];
 

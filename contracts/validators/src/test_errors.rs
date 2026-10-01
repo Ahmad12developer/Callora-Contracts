@@ -18,6 +18,7 @@ fn validator_error_codes_are_stable_and_unique() {
         (7, ValidatorError::AmountNegative),
         (8, ValidatorError::Overflow),
         (9, ValidatorError::OutOfRange),
+        (10, ValidatorError::InvalidOfferingId),
     ];
 
     let mut seen = BTreeSet::new();
@@ -29,7 +30,7 @@ fn validator_error_codes_are_stable_and_unique() {
         );
     }
 
-    assert_eq!(seen.len(), 9);
+    assert_eq!(seen.len(), 10);
 }
 
 #[test]

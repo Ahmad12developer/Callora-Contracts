@@ -127,6 +127,8 @@ pub enum StakeMigrateError {
     UpgradeNotAuthorized = 9,
     /// Arithmetic overflow detected in a checked operation.
     Overflow = 10,
+    /// The supplied WASM hash is all-zero bytes (almost certainly a mistake).
+    WasmHashZero = 11,
 }
 
 // ─── Event symbol helpers ─────────────────────────────────────────────────────
@@ -295,6 +297,7 @@ impl CalloraStakeMigrate {
     /// | Contract not initialised           | [`StakeMigrateError::NotInitialized`]  |
     /// | Caller is not the admin            | [`StakeMigrateError::Unauthorized`]    |
     /// | `target_version` ≠ stored version  | [`StakeMigrateError::VersionMismatch`] |
+    /// | `wasm_hash` is all-zero bytes      | [`StakeMigrateError::WasmHashZero`]    |
     ///
     /// # Events
     ///
@@ -317,6 +320,12 @@ impl CalloraStakeMigrate {
 
         if target_version != version {
             return Err(StakeMigrateError::VersionMismatch);
+        }
+
+        // Reject an all-zero hash — almost certainly a programming mistake
+        // (e.g. a zero-initialised buffer passed by a deployment script).
+        if wasm_hash == BytesN::from_array(&env, &[0u8; 32]) {
+            return Err(StakeMigrateError::WasmHashZero);
         }
 
         env.storage().instance().set(

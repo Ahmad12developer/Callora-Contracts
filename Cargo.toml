@@ -17,6 +17,7 @@ members = [
     "contracts/cold",
     "contracts/distribute",
     "contracts/distribute/fuzz",
+    "contracts/emergency",
     "contracts/errors",
     "contracts/escrow",
     "contracts/fee",
@@ -29,6 +30,7 @@ members = [
     "contracts/recipient",
     "contracts/recipient/fuzz",
     "contracts/registry",
+    "contracts/refund",
     "contracts/rescue",
     "contracts/revenue_pool",
     "contracts/revenue_pool/fuzz",
@@ -43,13 +45,14 @@ members = [
     "contracts/vault",
     "contracts/whitelist",
     "contracts/yield",
-    "contracts/vault",
 ]
 
 default-members = [
+    "contracts/batch_claim",
     "contracts/checkpoint",
     "contracts/cold",
     "contracts/distribute",
+    "contracts/emergency",
     "contracts/escrow",
     "contracts/freeze",
     "contracts/helpers",
@@ -57,6 +60,7 @@ default-members = [
     "contracts/limits",
     "contracts/migrate",
     "contracts/registry",
+    "contracts/refund",
     "contracts/rescue",
     "contracts/revenue_pool",
     "contracts/settlement",
@@ -77,6 +81,7 @@ soroban-sdk = "22"
 callora-settlement = { path = "contracts/settlement" }
 callora-revenue-pool = { path = "contracts/revenue_pool" }
 callora-distribute = { path = "contracts/distribute" }
+callora-vault = { path = "contracts/vault" }
 soroban-sdk = { workspace = true, features = ["testutils"] }
 
 [profile.dev]
@@ -92,4 +97,3 @@ debug-assertions = false  # Disable debug assertions in release
 panic = "abort"           # Smaller panic handler (no unwinding)
 codegen-units = 1         # Better optimization (slower compile, smaller binary)
 lto = true                # Link-time optimization across all crates
-

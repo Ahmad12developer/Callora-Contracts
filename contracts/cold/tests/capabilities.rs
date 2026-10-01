@@ -1,12 +1,8 @@
-//! Focused tests for the cold `capabilities()` view (#714).
+//! Focused tests for the cold `capabilities()` view (#1117).
 
 extern crate std;
 
-use callora_cold::{
-    CalloraCold, CalloraColdClient, ALL_CAPABILITIES, CAP_AUTO_REBALANCE, CAP_COLD_BALANCE_VIEW,
-    CAP_COLD_MULTISIG_SWEEP, CAP_HOT_COLD_SPLIT, CAP_PENDING_COLD_SWEEP_VIEW, CAP_SET_COLD_SIGNERS,
-    CAP_SET_HOT_COLD_RATIO,
-};
+use callora_cold::{CalloraCold, CalloraColdClient, ALL_CAPABILITIES};
 use soroban_sdk::Env;
 
 fn client(env: &Env) -> CalloraColdClient<'_> {
@@ -15,9 +11,9 @@ fn client(env: &Env) -> CalloraColdClient<'_> {
 }
 
 #[test]
-fn capabilities_returns_nonzero() {
+fn capabilities_returns_empty_until_vault_supports_cold_storage() {
     let env = Env::default();
-    assert_ne!(client(&env).capabilities(), 0);
+    assert_eq!(client(&env).capabilities(), 0);
 }
 
 #[test]
@@ -27,34 +23,17 @@ fn capabilities_equals_all_capabilities_constant() {
 }
 
 #[test]
-fn each_documented_cold_bit_is_set() {
+fn no_cold_capability_is_advertised() {
     let env = Env::default();
     let caps = client(&env).capabilities();
-    for bit in [
-        CAP_HOT_COLD_SPLIT,
-        CAP_AUTO_REBALANCE,
-        CAP_COLD_MULTISIG_SWEEP,
-        CAP_SET_HOT_COLD_RATIO,
-        CAP_SET_COLD_SIGNERS,
-        CAP_COLD_BALANCE_VIEW,
-        CAP_PENDING_COLD_SWEEP_VIEW,
-    ] {
-        assert_ne!(caps & bit, 0, "missing capability bit {bit:#x}");
-    }
+    assert_eq!(caps, ALL_CAPABILITIES);
+    assert_eq!(caps, 0);
 }
 
 #[test]
-fn capability_delta_detects_added_and_removed_bits() {
-    // Simulate an older deployment that lacked pending-sweep view, and a
-    // future one that drops auto-rebalance — clients XOR/mask to find deltas.
-    let old = ALL_CAPABILITIES & !CAP_PENDING_COLD_SWEEP_VIEW;
-    let new = ALL_CAPABILITIES & !CAP_AUTO_REBALANCE;
-
-    let added = new & !old;
-    let removed = old & !new;
-
-    assert_eq!(added, CAP_PENDING_COLD_SWEEP_VIEW);
-    assert_eq!(removed, CAP_AUTO_REBALANCE);
+fn capability_delta_has_no_false_positive_features() {
+    let current = client(&Env::default()).capabilities();
+    assert_eq!(current & !ALL_CAPABILITIES, 0);
 }
 
 #[test]

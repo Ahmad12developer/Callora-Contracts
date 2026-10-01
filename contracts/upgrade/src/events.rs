@@ -58,7 +58,7 @@ pub fn event_upgrade_recorded(env: &Env) -> Symbol {
 /// [`crate::set_cooldown`].
 ///
 /// Topics: `(cooldown_set, caller: Address)`
-/// Data:   `new_cooldown_secs: u64`
+/// Data:   `(old_cooldown_secs: u64, new_cooldown_secs: u64)`
 pub fn event_cooldown_set(env: &Env) -> Symbol {
     Symbol::new(env, "cooldown_set")
 }
