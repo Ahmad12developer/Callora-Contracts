@@ -12,6 +12,16 @@
 /// Maximum number of payment legs allowed in a single batch operation.
 pub const MAX_BATCH_SIZE: u32 = 50;
 
+use soroban_sdk::contracttype;
+
+/// Storage keys for the Distribute contract.
+#[contracttype]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum StorageKey {
+    /// Instance storage key for the boolean circuit breaker flag.
+    Paused,
+}
+
 /// Backwards-compatible aliases for callers that used the limits module.
 /// The canonical TTL policy is defined once at the crate root.
 pub use crate::{

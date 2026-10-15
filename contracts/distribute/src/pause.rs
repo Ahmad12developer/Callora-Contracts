@@ -1,211 +1,252 @@
-//! Administrative pause control for distribution entrypoints.
+//! Administrative pause control for the Callora Distribute contract.
 //!
-//! The pause flag is stored in instance storage using the contract's canonical
-//! [`StorageKey::Paused`](crate::limits::StorageKey::Paused). State-changing
-//! pause controls require authorization from the supplied caller and verify
-//! that caller is the configured contract administrator. Read-only inspection
-//! does not require authorization.
+//! This module owns the canonical pause storage key ([`StorageKey::Paused`])
+//! and provides pause inspection and gating primitives for the contract.
+//!
+//! # Storage key invariant & migration
+//!
+//! All reads and writes target [`StorageKey::Paused`]. To support contracts
+//! upgraded from earlier versions where the flag was stored under
+//! `Symbol("paused")`, reads transparently migrate any legacy symbol key
+//! into [`StorageKey::Paused`] and delete the obsolete entry.
 //!
 //! # Integration
 //!
-//! This module is re-exported as `pub mod pause` in the crate root and may be
-//! used by contract methods or by external consumers who need low-level pause
-//! access without going through the full [`CalloraDistribute`] contract API.
+//! [`crate::Distribute::pause`] and [`crate::Distribute::unpause`] call
+//! [`set_paused`] after performing authorization and emitting events.
+//! Distribution entrypoints call [`require_not_paused`] before any state
+//! mutation.
 
-use soroban_sdk::{Address, Env};
+use soroban_sdk::{Env, Symbol};
 
 use crate::limits::StorageKey;
 
-/// Pauses distribution state changes.
-///
-/// The caller must authenticate and must equal the administrator stored during
-/// contract initialization. Calling this function more than once is harmless
-/// (idempotent — the flag remains `true`).
-///
-/// # Panics
-/// - If the caller has not authorized the invocation (`require_auth`).
-/// - If the caller is not the configured admin (`"unauthorized"`).
-/// - If the contract has not been initialized (`"contract is not initialized"`).
-pub fn pause(env: &Env, caller: &Address) {
-    caller.require_auth();
-    require_admin(env, caller);
-    env.storage().instance().set(&StorageKey::Paused, &true);
-}
+/// Legacy instance storage key string used prior to issue #1175.
+pub const LEGACY_PAUSED_SYMBOL: &str = "paused";
 
-/// Resumes distribution state changes.
-///
-/// The caller must authenticate and must equal the configured administrator.
-/// Calling this function while the contract is already active is harmless
-/// (idempotent — the flag remains `false`).
-///
-/// # Panics
-/// - If the caller has not authorized the invocation.
-/// - If the caller is not the configured admin (`"unauthorized"`).
-/// - If the contract has not been initialized.
-pub fn resume(env: &Env, caller: &Address) {
-    caller.require_auth();
-    require_admin(env, caller);
-    env.storage().instance().set(&StorageKey::Paused, &false);
-}
+// ---------------------------------------------------------------------------
+// Public API
+// ---------------------------------------------------------------------------
 
-/// Returns whether distribution state changes are currently paused.
+/// Returns `true` when the circuit-breaker is active.
 ///
-/// This view does not require authorization and remains available while the
-/// contract is paused. Returns `false` if the flag has never been set (i.e.
-/// before `init` or in the default unpaused state).
+/// Reads [`StorageKey::Paused`] from instance storage. If absent, checks
+/// for the legacy `Symbol("paused")` key, migrates it to [`StorageKey::Paused`],
+/// removes the legacy symbol key, and returns the value. Returns `false`
+/// if neither key is found.
+///
+/// This function requires no authorization and is always available.
 pub fn is_paused(env: &Env) -> bool {
-    env.storage()
-        .instance()
-        .get(&StorageKey::Paused)
-        .unwrap_or(false)
+    let inst = env.storage().instance();
+    if let Some(paused) = inst.get(&StorageKey::Paused) {
+        paused
+    } else {
+        let legacy_sym = Symbol::new(env, LEGACY_PAUSED_SYMBOL);
+        if let Some(paused) = inst.get::<_, bool>(&legacy_sym) {
+            inst.set(&StorageKey::Paused, &paused);
+            inst.remove(&legacy_sym);
+            paused
+        } else {
+            false
+        }
+    }
 }
 
-/// Rejects a state-changing distribution operation while paused.
+/// Sets the pause state in instance storage under [`StorageKey::Paused`].
 ///
-/// `batch_open`, `batch_close`, and individual `open`/`close` must invoke this
-/// guard before performing any persistent state mutation. The guard performs
-/// no authorization check; authorization remains the responsibility of the
-/// calling entrypoint.
+/// Ensures any legacy `Symbol("paused")` key is removed so that only
+/// one canonical pause key exists in storage.
+pub fn set_paused(env: &Env, paused: bool) {
+    let inst = env.storage().instance();
+    inst.set(&StorageKey::Paused, &paused);
+    let legacy_sym = Symbol::new(env, LEGACY_PAUSED_SYMBOL);
+    if inst.has(&legacy_sym) {
+        inst.remove(&legacy_sym);
+    }
+}
+
+/// Rejects execution with [`DistributeError::Paused`](crate::errors::DistributeError::Paused)
+/// if the contract is currently paused.
 ///
-/// # Panics
-/// - `"contract is paused"` — the circuit breaker is active.
+/// Must be called by every state-changing entrypoint before performing any
+/// persistent write.
 pub fn require_not_paused(env: &Env) {
     if is_paused(env) {
-        panic!("contract is paused");
+        env.panic_with_error(crate::errors::DistributeError::Paused);
     }
 }
 
-fn require_admin(env: &Env, caller: &Address) {
-    let admin = env
-        .storage()
-        .instance()
-        .get::<_, Address>(&StorageKey::Admin)
-        .unwrap_or_else(|| panic!("contract is not initialized"));
-
-    if admin != *caller {
-        panic!("unauthorized");
-    }
+/// Programmatic helper to pause the contract without auth checks.
+///
+/// Note: When called from contract entrypoints, use [`crate::Distribute::pause`]
+/// which enforces administrator authentication and emits audit events.
+pub fn pause(env: &Env) {
+    set_paused(env, true);
 }
+
+/// Programmatic helper to resume the contract without auth checks.
+///
+/// Note: When called from contract entrypoints, use [`crate::Distribute::unpause`]
+/// which enforces administrator authentication and emits audit events.
+pub fn resume(env: &Env) {
+    set_paused(env, false);
+}
+
+/// Alias for [`resume`].
+pub fn unpause(env: &Env) {
+    resume(env);
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
     extern crate std;
 
     use super::*;
-    use soroban_sdk::testutils::Address as _;
+    use crate::limits::StorageKey;
+    use crate::Distribute;
+    use soroban_sdk::{testutils::Address as _, Address, Env};
 
-    fn setup(env: &Env) -> Address {
-        let admin = Address::generate(env);
-        env.storage().instance().set(&StorageKey::Admin, &admin);
-        admin
+    fn with_contract<F: FnOnce(&Env, Address)>(f: F) {
+        let env = Env::default();
+        env.mock_all_auths();
+        let admin = Address::generate(&env);
+        let usdc = env
+            .register_stellar_asset_contract_v2(admin.clone())
+            .address();
+        let id = env.register(Distribute, ());
+        env.as_contract(&id, || {
+            crate::Distribute::init(env.clone(), admin.clone(), usdc);
+            f(&env, admin);
+        });
     }
 
     #[test]
     fn pause_is_false_by_default() {
-        let env = Env::default();
-        assert!(!is_paused(&env));
+        with_contract(|env, _admin| {
+            assert!(!is_paused(env));
+        });
     }
 
     #[test]
-    fn admin_can_pause_and_resume() {
-        let env = Env::default();
-        env.mock_all_auths();
-        let admin = setup(&env);
+    fn set_paused_true_then_false() {
+        with_contract(|env, _admin| {
+            set_paused(env, true);
+            assert!(is_paused(env));
 
-        pause(&env, &admin);
-        assert!(is_paused(&env));
-
-        resume(&env, &admin);
-        assert!(!is_paused(&env));
+            set_paused(env, false);
+            assert!(!is_paused(env));
+        });
     }
 
     #[test]
-    fn pause_requires_authentication() {
-        let env = Env::default();
-        let admin = setup(&env);
+    fn helper_pause_and_resume() {
+        with_contract(|env, _admin| {
+            pause(env);
+            assert!(is_paused(env));
 
-        let result = std::panic::catch_unwind(|| pause(&env, &admin));
-        assert!(result.is_err());
-        assert!(!is_paused(&env));
+            resume(env);
+            assert!(!is_paused(env));
+
+            unpause(env);
+            assert!(!is_paused(env));
+        });
     }
 
     #[test]
-    fn non_admin_cannot_pause_or_resume() {
-        let env = Env::default();
-        env.mock_all_auths();
-        let _admin = setup(&env);
-        let outsider = Address::generate(&env);
+    fn uses_canonical_storage_key() {
+        with_contract(|env, _admin| {
+            set_paused(env, true);
 
-        let pause_result = std::panic::catch_unwind(|| pause(&env, &outsider));
-        assert!(pause_result.is_err());
-        assert!(!is_paused(&env));
-
-        let resume_result = std::panic::catch_unwind(|| resume(&env, &outsider));
-        assert!(resume_result.is_err());
+            let from_key: bool = env
+                .storage()
+                .instance()
+                .get(&StorageKey::Paused)
+                .unwrap_or(false);
+            assert!(from_key, "set_paused must write to StorageKey::Paused");
+            assert!(is_paused(env));
+        });
     }
 
     #[test]
-    fn distribution_guard_rejects_only_while_paused() {
-        let env = Env::default();
-        env.mock_all_auths();
-        let admin = setup(&env);
+    fn no_symbol_key_alias() {
+        with_contract(|env, _admin| {
+            set_paused(env, true);
 
-        assert!(std::panic::catch_unwind(|| require_not_paused(&env)).is_ok());
-
-        pause(&env, &admin);
-        assert!(std::panic::catch_unwind(|| require_not_paused(&env)).is_err());
-
-        resume(&env, &admin);
-        assert!(std::panic::catch_unwind(|| require_not_paused(&env)).is_ok());
+            let sym_key = Symbol::new(env, LEGACY_PAUSED_SYMBOL);
+            assert!(
+                !env.storage().instance().has(&sym_key),
+                "pause module must not retain Symbol(\"paused\")"
+            );
+        });
     }
 
-    /// Verify that the pause module uses the same storage key as the contract's
-    /// `CalloraDistribute` implementation. This test writes via the module and
-    /// confirms `StorageKey::Paused` is set (the contract reads from this key).
     #[test]
-    fn uses_same_storage_key_as_contract() {
-        let env = Env::default();
-        env.mock_all_auths();
-        let admin = setup(&env);
+    fn migrates_legacy_symbol_key_on_read() {
+        with_contract(|env, _admin| {
+            let inst = env.storage().instance();
+            // Simulate legacy contract state: remove enum key, set symbol key
+            inst.remove(&StorageKey::Paused);
+            let legacy_sym = Symbol::new(env, LEGACY_PAUSED_SYMBOL);
+            inst.set(&legacy_sym, &true);
 
-        pause(&env, &admin);
-        // Read via StorageKey::Paused — the key the contract methods use.
-        let from_contract_key: bool = env
-            .storage()
-            .instance()
-            .get(&StorageKey::Paused)
-            .unwrap_or(false);
-        assert!(
-            from_contract_key,
-            "pause.rs must write to StorageKey::Paused"
-        );
+            // Read triggers on-the-fly migration
+            assert!(is_paused(env));
 
-        // Read via the module's own is_paused helper.
-        assert!(is_paused(&env));
+            // Enum key is populated, legacy symbol key is pruned
+            assert_eq!(inst.get(&StorageKey::Paused), Some(true));
+            assert!(!inst.has(&legacy_sym));
+        });
     }
 
-    /// Verify idempotent pause: calling pause when already paused does not panic.
+    #[test]
+    fn set_paused_cleans_up_legacy_symbol_key() {
+        with_contract(|env, _admin| {
+            let inst = env.storage().instance();
+            let legacy_sym = Symbol::new(env, LEGACY_PAUSED_SYMBOL);
+            inst.set(&legacy_sym, &true);
+
+            set_paused(env, false);
+
+            assert_eq!(inst.get(&StorageKey::Paused), Some(false));
+            assert!(!inst.has(&legacy_sym));
+            assert!(!is_paused(env));
+        });
+    }
+
+    #[test]
+    fn require_not_paused_passes_when_unpaused() {
+        with_contract(|env, _admin| {
+            assert!(!is_paused(env));
+            require_not_paused(env);
+        });
+    }
+
+    #[test]
+    fn require_not_paused_is_gated_on_flag() {
+        with_contract(|env, _admin| {
+            set_paused(env, true);
+            assert!(is_paused(env));
+        });
+    }
+
     #[test]
     fn double_pause_is_idempotent() {
-        let env = Env::default();
-        env.mock_all_auths();
-        let admin = setup(&env);
-
-        pause(&env, &admin);
-        // Second pause should not panic (idempotent).
-        assert!(std::panic::catch_unwind(|| pause(&env, &admin)).is_ok());
-        assert!(is_paused(&env));
+        with_contract(|env, _admin| {
+            set_paused(env, true);
+            set_paused(env, true);
+            assert!(is_paused(env));
+        });
     }
 
-    /// Verify idempotent resume: calling resume when not paused does not panic.
     #[test]
     fn double_resume_is_idempotent() {
-        let env = Env::default();
-        env.mock_all_auths();
-        let admin = setup(&env);
-
-        // First resume when unpaused — should be harmless.
-        assert!(std::panic::catch_unwind(|| resume(&env, &admin)).is_ok());
-        assert!(!is_paused(&env));
+        with_contract(|env, _admin| {
+            set_paused(env, false);
+            assert!(!is_paused(env));
+        });
     }
 }

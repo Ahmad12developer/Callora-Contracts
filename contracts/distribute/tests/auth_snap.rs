@@ -80,10 +80,7 @@ fn init_requires_admin_auth() {
     // No auths installed — must be rejected.
     env.set_auths(&[]);
     let result = client.try_init(&admin, &usdc_addr);
-    assert!(
-        result.is_err(),
-        "init must fail when admin has not signed"
-    );
+    assert!(result.is_err(), "init must fail when admin has not signed");
 }
 
 /// `init` with the admin's signature must succeed and write state.
@@ -290,6 +287,7 @@ fn read_only_views_do_not_require_auth() {
     assert_eq!(client.get_usdc_token(), usdc_addr, "get_usdc_token");
     assert_eq!(client.get_pending_admin(), None, "get_pending_admin");
     assert!(!client.get_paused(), "get_paused");
+    assert!(!client.is_paused(), "is_paused");
     assert_eq!(
         client.get_max_distribute(),
         i128::MAX,
@@ -299,4 +297,33 @@ fn read_only_views_do_not_require_auth() {
     assert_eq!(client.balance(), 500, "balance");
     assert_eq!(client.get_version(), None, "get_version — never upgraded");
     let _ = client.version();
+}
+
+#[test]
+fn pause_and_unpause_single_key_invariant() {
+    let env = Env::default();
+    let (_, admin, _, client, _) = setup(&env);
+
+    env.mock_all_auths();
+
+    // Initially unpaused via both view aliases
+    assert!(!client.is_paused());
+    assert!(!client.get_paused());
+
+    client.pause(&admin);
+    assert!(client.is_paused(), "is_paused must return true after pause");
+    assert!(
+        client.get_paused(),
+        "get_paused must return true after pause"
+    );
+
+    client.unpause(&admin);
+    assert!(
+        !client.is_paused(),
+        "is_paused must return false after unpause"
+    );
+    assert!(
+        !client.get_paused(),
+        "get_paused must return false after unpause"
+    );
 }

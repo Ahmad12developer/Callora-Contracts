@@ -16,9 +16,15 @@
 //! RPC simulation alone does not extend on-chain lifetime; clients that only
 //! simulate views still need a submitted invocation or TTL-extension transaction.
 
-pub mod events;
 pub mod errors;
+pub mod events;
 pub mod limits;
+pub mod pause;
+
+pub use limits::StorageKey;
+
+/// Backwards-compatible alias for external consumers referencing CalloraDistribute.
+pub type CalloraDistribute = Distribute;
 
 use crate::errors::DistributeError;
 
@@ -30,7 +36,6 @@ use soroban_sdk::{contract, contractimpl, token, Address, BytesN, Env, Symbol, V
 
 const ADMIN_KEY: &str = "admin";
 const USDC_KEY: &str = "usdc";
-const PAUSED_KEY: &str = "paused";
 const PENDING_ADMIN_KEY: &str = "pending_admin";
 const MAX_DISTRIBUTE_KEY: &str = "max_distribute";
 const VERSION_KEY: &str = "version";
@@ -107,7 +112,7 @@ impl Distribute {
         let inst = env.storage().instance();
         inst.set(&Symbol::new(&env, ADMIN_KEY), &admin);
         inst.set(&Symbol::new(&env, USDC_KEY), &usdc_token);
-        inst.set(&Symbol::new(&env, PAUSED_KEY), &false);
+        pause::set_paused(&env, false);
         inst.extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
         env.events().publish(
             (
@@ -130,28 +135,14 @@ impl Distribute {
             .unwrap_or_else(|| env.panic_with_error(DistributeError::NotInitialized))
     }
 
-    fn require_admin(env: &Env, caller: &Address) {
+    pub(crate) fn require_admin(env: &Env, caller: &Address) {
         if *caller != Self::admin(env) {
             env.panic_with_error(DistributeError::Unauthorized);
         }
     }
 
     fn require_not_paused(env: &Env) {
-        if env
-            .storage()
-            .instance()
-            .get::<_, bool>(&Symbol::new(env, PAUSED_KEY))
-            .unwrap_or(false)
-        {
-            env.panic_with_error(DistributeError::Paused);
-        }
-    }
-
-    fn is_paused(env: &Env) -> bool {
-        env.storage()
-            .instance()
-            .get::<_, bool>(&Symbol::new(env, PAUSED_KEY))
-            .unwrap_or(false)
+        pause::require_not_paused(env);
     }
 
     fn validate_recipient(env: &Env, recipient: &Address, contract_self: &Address) {
@@ -328,12 +319,10 @@ impl Distribute {
     pub fn pause(env: Env, caller: Address) {
         caller.require_auth();
         Self::require_admin(&env, &caller);
-        if Self::is_paused(&env) {
+        if pause::is_paused(&env) {
             env.panic_with_error(DistributeError::AlreadyPaused);
         }
-        env.storage()
-            .instance()
-            .set(&Symbol::new(&env, PAUSED_KEY), &true);
+        pause::set_paused(&env, true);
         env.storage()
             .instance()
             .extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
@@ -350,20 +339,18 @@ impl Distribute {
     /// Deactivate the circuit-breaker. Only the admin may call.
     ///
     /// # Panics
-    /// * `DistributeError::Unauthorized` â€” caller is not the current admin.
-    /// * `DistributeError::NotPaused` â€” contract is not currently paused.
+    /// * `DistributeError::Unauthorized` — caller is not the current admin.
+    /// * `DistributeError::NotPaused` — contract is not currently paused.
     ///
     /// # Events
     /// Emits `pause_set` with `caller` as topic and `false` as data.
     pub fn unpause(env: Env, caller: Address) {
         caller.require_auth();
         Self::require_admin(&env, &caller);
-        if !Self::is_paused(&env) {
+        if !pause::is_paused(&env) {
             env.panic_with_error(DistributeError::NotPaused);
         }
-        env.storage()
-            .instance()
-            .set(&Symbol::new(&env, PAUSED_KEY), &false);
+        pause::set_paused(&env, false);
         env.storage()
             .instance()
             .extend_ttl(LIFETIME_THRESHOLD, BUMP_AMOUNT);
@@ -379,9 +366,14 @@ impl Distribute {
 
     /// Return `true` if the contract is currently paused.
     pub fn get_paused(env: Env) -> bool {
-        let paused = Self::is_paused(&env);
+        let paused = pause::is_paused(&env);
         Self::bump_instance_ttl(&env);
         paused
+    }
+
+    /// Return `true` if the contract is currently paused. Alias for `get_paused`.
+    pub fn is_paused(env: Env) -> bool {
+        Self::get_paused(env)
     }
 
     // -----------------------------------------------------------------------

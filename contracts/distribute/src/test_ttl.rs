@@ -250,7 +250,9 @@ fn ttl_read_never_shortens_an_external_extension() {
 fn ttl_instances_are_isolated() {
     let f = Fixture::new(false);
     let second = f.env.register(Distribute, ());
+    f.env.mock_all_auths();
     DistributeClient::new(&f.env, &second).init(&f.admin, &f.token);
+    f.env.set_auths(&[]);
     f.advance(INSTANCE_BUMP_AMOUNT - 1);
     f.read(View::Admin);
     assert_eq!(f.ttl(), INSTANCE_BUMP_AMOUNT);

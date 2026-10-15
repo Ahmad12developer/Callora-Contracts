@@ -777,7 +777,9 @@ fn batch_distribute_total_overflow_returns_typed_error() {
     let result = client.try_batch_distribute(&admin, &payments);
     assert_eq!(
         result,
-        Err(Ok(crate::errors::DistributeError::Overflow))
+        Err(Ok(soroban_sdk::Error::from_contract_error(
+            crate::errors::DistributeError::Overflow as u32,
+        )))
     );
 }
 
@@ -800,6 +802,112 @@ fn get_paused_returns_state() {
 
     client.unpause(&admin);
     assert!(!client.get_paused());
+    assert!(!client.is_paused());
+}
+
+#[test]
+fn pause_and_unpause_use_single_storage_key_paused() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let usdc_addr = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+    let contract_addr = env.register(Distribute, ());
+    let client = DistributeClient::new(&env, &contract_addr);
+
+    client.init(&admin, &usdc_addr);
+
+    // Initial state: StorageKey::Paused exists and is false
+    env.as_contract(&contract_addr, || {
+        let val: Option<bool> = env
+            .storage()
+            .instance()
+            .get(&crate::limits::StorageKey::Paused);
+        assert_eq!(val, Some(false));
+        // Symbol("paused") must not exist
+        let sym = soroban_sdk::Symbol::new(&env, "paused");
+        assert!(!env.storage().instance().has(&sym));
+    });
+
+    client.pause(&admin);
+
+    env.as_contract(&contract_addr, || {
+        let val: Option<bool> = env
+            .storage()
+            .instance()
+            .get(&crate::limits::StorageKey::Paused);
+        assert_eq!(val, Some(true));
+        let sym = soroban_sdk::Symbol::new(&env, "paused");
+        assert!(!env.storage().instance().has(&sym));
+    });
+
+    client.unpause(&admin);
+
+    env.as_contract(&contract_addr, || {
+        let val: Option<bool> = env
+            .storage()
+            .instance()
+            .get(&crate::limits::StorageKey::Paused);
+        assert_eq!(val, Some(false));
+        let sym = soroban_sdk::Symbol::new(&env, "paused");
+        assert!(!env.storage().instance().has(&sym));
+    });
+}
+
+#[test]
+fn legacy_symbol_key_migration_via_client() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let usdc_addr = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+    let contract_addr = env.register(Distribute, ());
+    let client = DistributeClient::new(&env, &contract_addr);
+
+    client.init(&admin, &usdc_addr);
+
+    // Inject legacy pre-migration state: Symbol("paused") = true, remove StorageKey::Paused
+    let sym = soroban_sdk::Symbol::new(&env, "paused");
+    env.as_contract(&contract_addr, || {
+        env.storage()
+            .instance()
+            .remove(&crate::limits::StorageKey::Paused);
+        env.storage().instance().set(&sym, &true);
+    });
+
+    // Client read triggers lazy migration
+    assert!(client.get_paused());
+    assert!(client.is_paused());
+
+    // StorageKey::Paused now exists with true, Symbol("paused") is purged
+    env.as_contract(&contract_addr, || {
+        let val: Option<bool> = env
+            .storage()
+            .instance()
+            .get(&crate::limits::StorageKey::Paused);
+        assert_eq!(val, Some(true));
+        assert!(!env.storage().instance().has(&sym));
+    });
+
+    // Unpause emits identical event and updates StorageKey::Paused
+    env.events().all();
+    client.unpause(&admin);
+
+    let events = env.events().all();
+    let unpause_event = events.last().unwrap();
+    let topic0: Symbol = unpause_event.1.get(0).unwrap().into_val(&env);
+    assert_eq!(topic0, Symbol::new(&env, "pause_set"));
+    let topic1: Symbol = unpause_event.1.get(1).unwrap().into_val(&env);
+    assert_eq!(topic1, Symbol::new(&env, "callora_v1"));
+    let topic2: Address = unpause_event.1.get(2).unwrap().into_val(&env);
+    assert_eq!(topic2, admin);
+    let is_paused: bool = unpause_event.2.into_val(&env);
+    assert!(!is_paused);
+
+    assert!(!client.get_paused());
+    assert!(!client.is_paused());
 }
 
 #[test]
